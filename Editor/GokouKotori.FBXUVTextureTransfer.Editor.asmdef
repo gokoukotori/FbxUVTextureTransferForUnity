@@ -1,0 +1,33 @@
+{
+  "name": "GokouKotori.FBXUVTextureTransfer.Editor",
+  "rootNamespace": "GokouKotori.FBXUVTextureTransfer.Editor",
+  "references": [
+    "GokouKotori.FBXUVTextureTransfer.Runtime",
+    "net.rs64.tex-trans-tool.runtime",
+    "nadena.dev.ndmf",
+    "nadena.dev.ndmf.runtime",
+    "VRC.SDK3A"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [
+    {
+      "name": "net.rs64.tex-trans-tool",
+      "expression": "1.1.0-beta.9",
+      "define": "FBXUV_TTT_BETA_9"
+    },
+    {
+      "name": "nadena.dev.ndmf",
+      "expression": "1.14.4",
+      "define": "FBXUV_NDMF_1_14_4"
+    }
+  ],
+  "noEngineReferences": false
+}

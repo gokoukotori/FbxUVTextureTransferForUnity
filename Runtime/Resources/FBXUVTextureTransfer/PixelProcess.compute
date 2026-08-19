@@ -1,0 +1,150 @@
+#pragma kernel InitializeSeeds
+#pragma kernel PropagateSeeds
+#pragma kernel ResolveFill
+#pragma kernel Dilate8Connected
+#pragma kernel CompositeStraightAlpha
+
+Texture2D<float4> _Source;
+Texture2D<float4> _Mask;
+Texture2D<float4> _SeedRead;
+RWTexture2D<float4> _SeedWrite;
+RWTexture2D<float4> _Output;
+RWTexture2D<float4> _Destination;
+
+int2 _TextureSize;
+int2 _DestinationOffset;
+int2 _DestinationSize;
+int _Jump;
+
+bool IsInside(int2 coordinate)
+{
+    return all(coordinate >= 0) && all(coordinate < _TextureSize);
+}
+
+[numthreads(8, 8, 1)]
+void InitializeSeeds(uint3 dispatchId : SV_DispatchThreadID)
+{
+    int2 coordinate = int2(dispatchId.xy);
+    if (!IsInside(coordinate)) return;
+    float4 source = _Source[coordinate];
+    bool isTarget = _Mask[coordinate].r > 0.5;
+    _SeedWrite[coordinate] = isTarget && source.a > 0.0
+        ? float4(coordinate, 1.0, 0.0)
+        : float4(-1.0, -1.0, 0.0, 0.0);
+}
+
+[numthreads(8, 8, 1)]
+void PropagateSeeds(uint3 dispatchId : SV_DispatchThreadID)
+{
+    int2 coordinate = int2(dispatchId.xy);
+    if (!IsInside(coordinate)) return;
+    if (_Mask[coordinate].r <= 0.5)
+    {
+        _SeedWrite[coordinate] = float4(-1.0, -1.0, 0.0, 0.0);
+        return;
+    }
+
+    float4 bestSeed = _SeedRead[coordinate];
+    float bestDistance = bestSeed.z > 0.5
+        ? dot(bestSeed.xy - coordinate, bestSeed.xy - coordinate)
+        : 3.402823466e+38;
+
+    [unroll]
+    for (int offsetY = -1; offsetY <= 1; offsetY++)
+    {
+        [unroll]
+        for (int offsetX = -1; offsetX <= 1; offsetX++)
+        {
+            if (offsetX == 0 && offsetY == 0) continue;
+            int2 candidateCoordinate = coordinate + int2(offsetX, offsetY) * _Jump;
+            if (!IsInside(candidateCoordinate)) continue;
+            float4 candidate = _SeedRead[candidateCoordinate];
+            if (candidate.z <= 0.5) continue;
+            float2 difference = candidate.xy - coordinate;
+            float distance = dot(difference, difference);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestSeed = candidate;
+            }
+        }
+    }
+    _SeedWrite[coordinate] = bestSeed;
+}
+
+[numthreads(8, 8, 1)]
+void ResolveFill(uint3 dispatchId : SV_DispatchThreadID)
+{
+    int2 coordinate = int2(dispatchId.xy);
+    if (!IsInside(coordinate)) return;
+    if (_Mask[coordinate].r <= 0.5)
+    {
+        _Output[coordinate] = 0.0;
+        return;
+    }
+
+    float4 source = _Source[coordinate];
+    if (source.a > 0.0)
+    {
+        _Output[coordinate] = source;
+        return;
+    }
+
+    float4 seed = _SeedRead[coordinate];
+    if (seed.z <= 0.5)
+    {
+        _Output[coordinate] = 0.0;
+        return;
+    }
+
+    float4 seedColor = _Source[int2(seed.xy)];
+    _Output[coordinate] = float4(seedColor.rgb, 1.0);
+}
+
+[numthreads(8, 8, 1)]
+void Dilate8Connected(uint3 dispatchId : SV_DispatchThreadID)
+{
+    int2 coordinate = int2(dispatchId.xy);
+    if (!IsInside(coordinate)) return;
+    float4 current = _Source[coordinate];
+    if (current.a > 0.0)
+    {
+        _Output[coordinate] = current;
+        return;
+    }
+
+    float4 replacement = 0.0;
+    [unroll]
+    for (int offsetY = -1; offsetY <= 1; offsetY++)
+    {
+        [unroll]
+        for (int offsetX = -1; offsetX <= 1; offsetX++)
+        {
+            if (offsetX == 0 && offsetY == 0) continue;
+            int2 neighbor = coordinate + int2(offsetX, offsetY);
+            if (!IsInside(neighbor)) continue;
+            float4 candidate = _Source[neighbor];
+            if (candidate.a > 0.0 && replacement.a <= 0.0) replacement = candidate;
+        }
+    }
+    _Output[coordinate] = replacement;
+}
+
+[numthreads(8, 8, 1)]
+void CompositeStraightAlpha(uint3 dispatchId : SV_DispatchThreadID)
+{
+    int2 sourceCoordinate = int2(dispatchId.xy);
+    if (!IsInside(sourceCoordinate)) return;
+    // Scratch textures use image top-left rows. TTT's destination uses Texture2D/UV bottom-left rows.
+    int2 topLeftCoordinate = sourceCoordinate + _DestinationOffset;
+    int2 destinationCoordinate = int2(topLeftCoordinate.x, _DestinationSize.y - 1 - topLeftCoordinate.y);
+    if (any(destinationCoordinate < 0) || any(destinationCoordinate >= _DestinationSize)) return;
+    float4 add = _Source[sourceCoordinate];
+    if (add.a <= 0.0) return;
+    float4 base = _Destination[destinationCoordinate];
+    float alpha = add.a + base.a * (1.0 - add.a);
+    float3 premultiplied = add.rgb * add.a + base.rgb * base.a * (1.0 - add.a);
+    _Destination[destinationCoordinate] = alpha > 0.0
+        ? float4(premultiplied / alpha, alpha)
+        : 0.0;
+}

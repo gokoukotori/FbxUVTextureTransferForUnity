@@ -1,0 +1,23 @@
+{
+  "name": "com.gokoukotori.fbx-uv-texture-transfer",
+  "displayName": "FBX UV Texture Transfer",
+  "version": "0.1.0",
+  "unity": "2022.3",
+  "unityRelease": "22f1",
+  "description": "A Unity Editor extension that transfers textures between FBX UV islands for VRChat avatars and applies them non-destructively as external layers in TexTransTool MultiLayerImageCanvas.",
+  "author": {
+    "name": "gokoukotori"
+  },
+  "license": "MPL-2.0",
+  "keywords": [
+    "VRChat",
+    "TexTransTool",
+    "UV",
+    "Texture"
+  ],
+  "vpmDependencies": {
+    "net.rs64.tex-trans-tool": ">=1.1.0-beta.9",
+    "nadena.dev.ndmf": ">=1.14.4",
+    "com.vrchat.avatars": ">=3.10.4"
+  }
+}
