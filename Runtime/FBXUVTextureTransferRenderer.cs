@@ -184,7 +184,7 @@ namespace GokouKotori.FBXUVTextureTransfer
                     var other = destination;
                     for (var pass = 0; pass < bleedPixels; pass++)
                     {
-                        Dilate(current, other, pixelProcessShader, kernels);
+                        Dilate(current, targetMask, other, pixelProcessShader, kernels);
                         var swap = current;
                         current = other;
                         other = swap;
@@ -231,7 +231,7 @@ namespace GokouKotori.FBXUVTextureTransfer
                 try
                 {
                     region = GetColorTemporary(destination, pixelBounds.Width, pixelBounds.Height, "FBXUV Region");
-                    mask = GetColorTemporary(destination, pixelBounds.Width, pixelBounds.Height, "FBXUV Target Mask");
+                    mask = GetMaskTemporary(pixelBounds.Width, pixelBounds.Height, "FBXUV Target And Coverage Mask");
                     work = GetColorTemporary(destination, pixelBounds.Width, pixelBounds.Height, "FBXUV Work");
                     seedA = GetSeedTemporary(pixelBounds.Width, pixelBounds.Height, "FBXUV Seed A");
                     seedB = GetSeedTemporary(pixelBounds.Width, pixelBounds.Height, "FBXUV Seed B");
@@ -246,15 +246,16 @@ namespace GokouKotori.FBXUVTextureTransfer
                     if (vertexMap.Count == 0) return;
                     UpdateTransferMesh(transferMesh, sourceTriangles, vertexMap, pixelBounds.Left, pixelBounds.Top, buffers);
                     UpdateMaskMesh(maskMesh, targetTriangles, destination.width, destination.height, pixelBounds.Left, pixelBounds.Top, buffers);
-                    DrawTransferMesh(transferMesh, sourceTexture, region, material);
                     DrawMaskMesh(maskMesh, mask, material);
+                    DrawCoverageMesh(transferMesh, mask, material);
+                    DrawTransferMesh(transferMesh, sourceTexture, region, material);
 
                     FillTransparentTargetPixels(region, mask, work, seedA, seedB, pixelProcessShader, kernels);
                     var input = work;
                     var output = region;
                     for (var pass = 0; pass < BleedPixels; pass++)
                     {
-                        Dilate(input, output, pixelProcessShader, kernels);
+                        Dilate(input, mask, output, pixelProcessShader, kernels);
                         var swap = input;
                         input = output;
                         output = swap;
@@ -361,6 +362,12 @@ namespace GokouKotori.FBXUVTextureTransfer
             DrawMesh(mesh, target, material, 1);
         }
 
+        private static void DrawCoverageMesh(Mesh mesh, RenderTexture target, Material material)
+        {
+            material.SetVector("_OutputSize", new Vector4(target.width, target.height, 1f / target.width, 1f / target.height));
+            DrawMesh(mesh, target, material, 2);
+        }
+
         private static void DrawMesh(Mesh mesh, RenderTexture target, Material material, int pass)
         {
             var previous = RenderTexture.active;
@@ -417,6 +424,7 @@ namespace GokouKotori.FBXUVTextureTransfer
 
         private static void Dilate(
             RenderTexture source,
+            RenderTexture mask,
             RenderTexture output,
             ComputeShader computeShader,
             ComputeKernels kernels)
@@ -424,6 +432,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             var kernel = kernels.Dilate8Connected;
             SetTextureSize(computeShader, source.width, source.height);
             computeShader.SetTexture(kernel, "_Source", source);
+            computeShader.SetTexture(kernel, "_Mask", mask);
             computeShader.SetTexture(kernel, "_Output", output);
             Dispatch(computeShader, kernel, source.width, source.height);
         }
@@ -490,6 +499,21 @@ namespace GokouKotori.FBXUVTextureTransfer
         private static RenderTexture GetSeedTemporary(int width, int height, string name)
         {
             var descriptor = new RenderTextureDescriptor(width, height, RenderTextureFormat.ARGBFloat, 0)
+            {
+                enableRandomWrite = true,
+                msaaSamples = 1,
+                volumeDepth = 1,
+                dimension = TextureDimension.Tex2D,
+                useMipMap = false,
+                autoGenerateMips = false,
+                sRGB = false,
+            };
+            return GetTemporary(descriptor, name, FilterMode.Point);
+        }
+
+        private static RenderTexture GetMaskTemporary(int width, int height, string name)
+        {
+            var descriptor = new RenderTextureDescriptor(width, height, RenderTextureFormat.ARGB32, 0)
             {
                 enableRandomWrite = true,
                 msaaSamples = 1,

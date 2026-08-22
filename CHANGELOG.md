@@ -2,6 +2,16 @@
 
 このプロジェクトの主な変更はこのファイルに記録します。
 
+## [0.1.1] - 2026-08-22
+
+### Added
+
+- Source Texture のalphaを常に保持し、透明pixelと転写coverageの穴を区別して補完する透明テクスチャ対応を追加。
+
+### Fixed
+
+- Target の Mesh / Submesh 候補が1組だけの場合の自動選択を復元し、InspectorやProjectの更新で未保存のMesh選択が失われる問題を修正。
+
 ## [0.1.0] - 2026-08-18
 
 ### Added

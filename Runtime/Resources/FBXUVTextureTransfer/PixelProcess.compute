@@ -26,9 +26,9 @@ void InitializeSeeds(uint3 dispatchId : SV_DispatchThreadID)
 {
     int2 coordinate = int2(dispatchId.xy);
     if (!IsInside(coordinate)) return;
-    float4 source = _Source[coordinate];
     bool isTarget = _Mask[coordinate].r > 0.5;
-    _SeedWrite[coordinate] = isTarget && source.a > 0.0
+    bool isCovered = _Mask[coordinate].g > 0.5;
+    _SeedWrite[coordinate] = isTarget && isCovered
         ? float4(coordinate, 1.0, 0.0)
         : float4(-1.0, -1.0, 0.0, 0.0);
 }
@@ -84,7 +84,7 @@ void ResolveFill(uint3 dispatchId : SV_DispatchThreadID)
     }
 
     float4 source = _Source[coordinate];
-    if (source.a > 0.0)
+    if (_Mask[coordinate].g > 0.5)
     {
         _Output[coordinate] = source;
         return;
@@ -97,8 +97,7 @@ void ResolveFill(uint3 dispatchId : SV_DispatchThreadID)
         return;
     }
 
-    float4 seedColor = _Source[int2(seed.xy)];
-    _Output[coordinate] = float4(seedColor.rgb, 1.0);
+    _Output[coordinate] = _Source[int2(seed.xy)];
 }
 
 [numthreads(8, 8, 1)]
@@ -107,7 +106,7 @@ void Dilate8Connected(uint3 dispatchId : SV_DispatchThreadID)
     int2 coordinate = int2(dispatchId.xy);
     if (!IsInside(coordinate)) return;
     float4 current = _Source[coordinate];
-    if (current.a > 0.0)
+    if (_Mask[coordinate].r > 0.5 || current.a > 0.0)
     {
         _Output[coordinate] = current;
         return;

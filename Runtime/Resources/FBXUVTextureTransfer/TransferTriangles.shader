@@ -108,6 +108,44 @@ Shader "Hidden/FBXUVTextureTransfer/TransferTriangles"
             }
             ENDHLSL
         }
+
+        Pass
+        {
+            Name "Coverage"
+            Blend One Zero
+            ColorMask G
+
+            HLSLPROGRAM
+            #pragma target 4.5
+            #pragma vertex VertCoverage
+            #pragma fragment FragCoverage
+
+            float4 _OutputSize;
+
+            struct Attributes
+            {
+                float4 position : POSITION;
+            };
+
+            struct Varyings
+            {
+                float4 position : SV_POSITION;
+            };
+
+            Varyings VertCoverage(Attributes input)
+            {
+                Varyings output;
+                float2 normalized = input.position.xy / _OutputSize.xy;
+                output.position = float4(normalized.x * 2.0 - 1.0, 1.0 - normalized.y * 2.0, 0.0, 1.0);
+                return output;
+            }
+
+            float4 FragCoverage(Varyings input) : SV_Target
+            {
+                return float4(0.0, 1.0, 0.0, 0.0);
+            }
+            ENDHLSL
+        }
     }
     Fallback Off
 }

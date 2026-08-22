@@ -22,6 +22,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             Target
         }
 
+        private enum RegionReconcileRequest
+        {
+            None,
+            PreservePendingSelections,
+            ReplacePendingSelections
+        }
+
         [Serializable]
         private sealed class ViewState
         {
@@ -36,6 +43,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             [NonSerialized] public int cachedSubMeshIndex = -1;
             [NonSerialized] public int cachedUvChannel = -1;
             [NonSerialized] public string extractionError;
+            [NonSerialized] public bool hasPendingRegionSelection;
         }
 
         private readonly struct MeshAnalysisKey : IEquatable<MeshAnalysisKey>
@@ -106,7 +114,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         [NonSerialized] private GameObject cachedSourceModelOrPrefab;
         [NonSerialized] private GameObject cachedTargetModelOrPrefab;
         [NonSerialized] private Texture2D cachedTargetTexture;
-        [NonSerialized] private bool forceRegionReconcile;
+        [NonSerialized] private RegionReconcileRequest regionReconcileRequest;
 
         private readonly Dictionary<MeshAnalysisKey, MeshAnalysisEntry> meshAnalysisCache =
             new Dictionary<MeshAnalysisKey, MeshAnalysisEntry>();
@@ -169,12 +177,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         private void OnProjectChanged()
         {
             InvalidateAllCaches();
+            RequestRegionReconcile(RegionReconcileRequest.PreservePendingSelections);
             Repaint();
         }
 
         private void OnUndoRedoPerformed()
         {
             InvalidateAllCaches();
+            RequestRegionReconcile(RegionReconcileRequest.ReplacePendingSelections);
             Repaint();
         }
 
@@ -201,11 +211,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 if (currentSerializedLayer.UpdateIfRequiredOrScript())
                 {
                     regionNameLabelsValid = false;
-                    forceRegionReconcile = true;
+                    RequestRegionReconcile(RegionReconcileRequest.PreservePendingSelections);
                 }
+                var reconcileRequest = ConsumeRegionReconcileRequest();
                 changed |= ReconcileActiveRegion(
                     currentSerializedLayer,
-                    ConsumeForceRegionReconcile());
+                    reconcileRequest != RegionReconcileRequest.None,
+                    reconcileRequest == RegionReconcileRequest.PreservePendingSelections);
             }
 
             if (changed) Repaint();
@@ -229,12 +241,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 if (currentSerializedLayer.UpdateIfRequiredOrScript())
                 {
                     regionNameLabelsValid = false;
-                    forceRegionReconcile = true;
+                    RequestRegionReconcile(RegionReconcileRequest.PreservePendingSelections);
                 }
                 SynchronizeModelOrPrefabReferences();
+                var reconcileRequest = ConsumeRegionReconcileRequest();
                 ReconcileActiveRegion(
                     currentSerializedLayer,
-                    ConsumeForceRegionReconcile());
+                    reconcileRequest != RegionReconcileRequest.None,
+                    reconcileRequest == RegionReconcileRequest.PreservePendingSelections);
 
                 scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
                 if (DrawRegionSelection(currentSerializedLayer))
@@ -383,13 +397,15 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 EditorGUI.BeginChangeCheck();
                 state.subMeshIndex = EditorGUILayout.IntSlider("Submesh", state.subMeshIndex, 0, subMeshCount - 1);
                 state.uvChannel = EditorGUILayout.IntSlider("UV channel", state.uvChannel, 0, 7);
-                if (EditorGUI.EndChangeCheck()) Invalidate(state);
+                if (EditorGUI.EndChangeCheck()) MarkRegionSelectionPending(state);
             }
         }
 
         private void DrawTargetMeshSelection(ViewState state)
         {
             var targetTexture = ResolveTargetTexture();
+            var candidates = CollectTargetMeshCandidates(targetTexture);
+            TrySelectOnlyTargetCandidate(state, candidates);
             var options = CollectTargetMeshOptions(targetTexture);
             var selectedIndex = options.FindIndex(option =>
                 option.Mesh == state.mesh && option.SubMeshIndex == state.subMeshIndex);
@@ -436,7 +452,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             {
                 EditorGUI.BeginChangeCheck();
                 state.uvChannel = EditorGUILayout.IntSlider("UV channel", state.uvChannel, 0, 7);
-                if (EditorGUI.EndChangeCheck()) Invalidate(state);
+                if (EditorGUI.EndChangeCheck()) MarkRegionSelectionPending(state);
             }
         }
 
@@ -490,6 +506,26 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             state.mesh = mesh;
             state.subMeshIndex = subMeshIndex;
+            MarkRegionSelectionPending(state);
+        }
+
+        private static bool TrySelectOnlyTargetCandidate(
+            ViewState state,
+            IReadOnlyList<FBXUVTargetMeshCandidate> candidates)
+        {
+            if (candidates.Count != 1 || candidates[0].SubMeshIndices.Count != 1) return false;
+
+            var candidate = candidates[0];
+            var subMeshIndex = candidate.SubMeshIndices[0];
+            if (state.mesh == candidate.Mesh && state.subMeshIndex == subMeshIndex) return false;
+
+            ApplyMeshSelection(state, candidate.Mesh, subMeshIndex);
+            return true;
+        }
+
+        private static void MarkRegionSelectionPending(ViewState state)
+        {
+            state.hasPendingRegionSelection = true;
             Invalidate(state);
         }
 
@@ -625,6 +661,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             serializedLayer.ApplyModifiedProperties();
             PrefabUtility.RecordPrefabInstancePropertyModifications(serializedLayer.targetObject);
             EditorUtility.SetDirty(serializedLayer.targetObject);
+            state.hasPendingRegionSelection = false;
         }
 
         private void EnsureIslands(ViewState state)
@@ -731,7 +768,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             targetView.backgroundTexture = canvas?.TargetTexture?.SelectTexture;
 
             ReconcileActiveRegion(currentSerializedLayer, true);
-            forceRegionReconcile = false;
+            regionReconcileRequest = RegionReconcileRequest.None;
         }
 
         private bool SynchronizeModelOrPrefabReferences()
@@ -748,6 +785,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             cachedTargetModelOrPrefab = targetRoot;
             cachedTargetTexture = targetTexture;
             InvalidateAllCaches();
+            RequestRegionReconcile(RegionReconcileRequest.PreservePendingSelections);
 
             return true;
         }
@@ -764,7 +802,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             {
                 if (serializedLayer != null) InvalidateAllCaches();
                 serializedLayer = new SerializedObject(layer);
-                forceRegionReconcile = true;
+                RequestRegionReconcile(RegionReconcileRequest.ReplacePendingSelections);
             }
 
             return serializedLayer;
@@ -777,7 +815,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             InvalidateCandidateCaches();
             Invalidate(sourceView);
             Invalidate(targetView);
-            forceRegionReconcile = true;
         }
 
         private void InvalidateCandidateCaches()
@@ -798,14 +835,22 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             regionNameLabels = null;
         }
 
-        private bool ConsumeForceRegionReconcile()
+        private void RequestRegionReconcile(RegionReconcileRequest request)
         {
-            var forceRefresh = forceRegionReconcile;
-            forceRegionReconcile = false;
-            return forceRefresh;
+            if (request > regionReconcileRequest) regionReconcileRequest = request;
         }
 
-        private bool ReconcileActiveRegion(SerializedObject serializedLayer, bool forceRefresh = false)
+        private RegionReconcileRequest ConsumeRegionReconcileRequest()
+        {
+            var request = regionReconcileRequest;
+            regionReconcileRequest = RegionReconcileRequest.None;
+            return request;
+        }
+
+        private bool ReconcileActiveRegion(
+            SerializedObject serializedLayer,
+            bool forceRefresh = false,
+            bool preservePendingSelections = false)
         {
             var bindings = serializedLayer.FindProperty("regionBindings");
             if (bindings == null || !bindings.isArray || bindings.arraySize == 0)
@@ -850,9 +895,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                                    !string.Equals(activeRegionName, reconciledName, StringComparison.Ordinal);
             activeRegionIndex = reconciledIndex;
             activeRegionName = reconciledName;
-            if (selectionChanged || forceRefresh)
+            if (selectionChanged)
             {
                 RefreshSelectedIslandIds(serializedLayer);
+            }
+            else if (forceRefresh)
+            {
+                RefreshSelectedIslandIds(serializedLayer, preservePendingSelections);
             }
 
             return selectionChanged;
@@ -867,18 +916,33 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 : null;
         }
 
-        private void RefreshSelectedIslandIds(SerializedObject serializedLayer)
+        private void RefreshSelectedIslandIds(
+            SerializedObject serializedLayer,
+            bool preservePendingSelections = false)
         {
-            LoadViewFromRegion(serializedLayer, sourceView, Side.Source, true);
-            LoadViewFromRegion(serializedLayer, targetView, Side.Target, true);
+            LoadViewFromRegion(
+                serializedLayer,
+                sourceView,
+                Side.Source,
+                true,
+                preservePendingSelections);
+            LoadViewFromRegion(
+                serializedLayer,
+                targetView,
+                Side.Target,
+                true,
+                preservePendingSelections);
         }
 
         private void LoadViewFromRegion(
             SerializedObject serializedLayer,
             ViewState state,
             Side side,
-            bool clearWhenMissing)
+            bool clearWhenMissing,
+            bool preservePendingSelection = false)
         {
+            if (preservePendingSelection && state.hasPendingRegionSelection) return;
+
             var binding = GetActiveBinding(serializedLayer);
             var region = binding?.FindPropertyRelative(side == Side.Source ? "sourceRegion" : "targetRegion");
             if (region == null)
@@ -897,6 +961,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             state.mesh = mesh;
             state.subMeshIndex = region.FindPropertyRelative("subMeshIndex").intValue;
             state.uvChannel = region.FindPropertyRelative("uvChannel").intValue;
+            state.hasPendingRegionSelection = false;
             Invalidate(state);
             EnsureIslands(state);
             if (!IsMeshHashCurrent(region, mesh, state.subMeshIndex, state.uvChannel))
@@ -935,6 +1000,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             state.mesh = null;
             state.subMeshIndex = 0;
             state.uvChannel = 0;
+            state.hasPendingRegionSelection = false;
             Invalidate(state);
         }
 

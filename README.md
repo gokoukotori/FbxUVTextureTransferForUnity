@@ -21,6 +21,8 @@ Source と Target の UV アイランド選択は各 Region Binding に保存さ
 
 1 個の FBX UV Texture Transfer Layer が使用するsource Textureは 1 個です。Layer内のすべての Region Binding が同じsource Textureを共有します。複数のsource Textureから転写する場合は、source TextureごとにLayerを分けてください。
 
+Source Texture の alpha は常に保持されます。完全透明または半透明のpixelも有効なSourceの値として扱い、転写coverageの欠落とは区別します。Target UV island内で転写三角形のrasterization coverageが欠けたpixelは、coverage済みpixelから補完します。この補完によってSource alpha 0のpixelを不透明化することはありません。Target UV islandの外側には従来どおり4pxのbleedを生成します。
+
 SourceまたはTargetのModel / Prefabを変更しても、保存済みRegionを別Meshへ暗黙に置換しません。選択済みMeshが新しいModel / Prefab配下にない場合は警告し、UVアイランドを明示的に選び直すまでValidationがビルドを停止します。Targetはさらに、親MLICのTargetTextureをMaterialが参照しているMesh / Submeshだけを候補とし、最終Avatar Root配下でも使用されていることを検証します。
 
 Region Binding の向き補正は `そのまま`、`左右反転`、`上下反転`、`180度回転` から手動指定します。既定の `そのまま` はSourceの画像上の上下左右をTarget regionでも維持します。Islandの向きが実際に異なるRegionだけ補正してください。
@@ -42,7 +44,7 @@ TexTransTool の backend は Unity に設定してください。WGPU backend �
 9. Validation 表示にエラーがないことを確認します。
 10. NDMF Preview で結果を確認してからアバターをビルドします。
 
-MLIC の Opacity、Blend、Layer Mask、Clipping は、転写画像の生成後に TexTransTool が適用します。通常は本コンポーネント側で同じ設定を重複して行う必要はありません。
+MLIC の Opacity、Blend、Layer Mask、Clipping は、Source Texture のalphaを保持した転写画像の生成後に TexTransTool が適用します。通常は本コンポーネント側で同じ設定を重複して行う必要はありません。
 
 ## Region選択とFBXハッシュ
 
