@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using nadena.dev.ndmf;
 using net.rs64.TexTransTool.MultiLayerImage;
 using UnityEngine;
 
@@ -7,7 +8,7 @@ namespace GokouKotori.FBXUVTextureTransfer
 {
     [AddComponentMenu("FBX UV Texture Transfer/FBX UV Texture Transfer Layer")]
     [DisallowMultipleComponent]
-    public sealed class FBXUVTextureTransferLayer : MonoBehaviour, IExternalToolCanBehaveAsImageLayerV1
+    public sealed class FBXUVTextureTransferLayer : MonoBehaviour, IExternalToolCanBehaveAsImageLayerV1, INDMFEditorOnly
     {
         public GameObject sourceModelOrPrefab;
         public GameObject targetModelOrPrefab;
@@ -20,6 +21,10 @@ namespace GokouKotori.FBXUVTextureTransfer
         public GameObject TargetModelOrPrefab { get { return targetModelOrPrefab; } set { targetModelOrPrefab = value; } }
         public Texture2D DefaultSourceTexture { get { return defaultSourceTexture; } set { defaultSourceTexture = value; } }
         public List<FBXUVRegionBinding> RegionBindings { get { return regionBindings; } }
+
+        // Apply on Play can evaluate layers from an earlier Awake before this component's OnEnable runs.
+        // Keep explicit component and hierarchy disabling semantics without depending on lifecycle callbacks.
+        internal bool IsEnabledInHierarchy => enabled && gameObject.activeInHierarchy;
 
         public Shader ResolveTriangleShader()
         {
@@ -94,7 +99,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             {
                 FBXUVTextureTransferRenderer.Clear(writeDistentionTexture);
                 string reason;
-                if (!isActiveAndEnabled || !CanRender(out reason)) return;
+                if (!IsEnabledInHierarchy || !CanRender(out reason)) return;
                 FBXUVTextureTransferRenderer.Render(this, writeDistentionTexture);
             }
             catch (Exception exception)

@@ -2,6 +2,13 @@
 
 このプロジェクトの主な変更はこのファイルに記録します。
 
+## [0.1.2] - 2026-08-22
+
+### Fixed
+
+- NDMF Apply on Play がコンポーネントの `OnEnable` より先に実行された場合に、FBX UV Texture Transfer Layer の転写結果が反映されない問題を修正。
+- FBX UV Texture Transfer Layer がVRC SDKの不正コンポーネントとして検出され、SDK Control Panelでエラーになる問題を修正。
+
 ## [0.1.1] - 2026-08-22
 
 ### Added

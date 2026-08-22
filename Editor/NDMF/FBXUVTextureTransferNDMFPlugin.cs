@@ -36,7 +36,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
         {
             var layers = context.AvatarRootObject
                 .GetComponentsInChildren<FBXUVTextureTransferLayer>(true)
-                .Where(layer => layer.isActiveAndEnabled)
+                .Where(layer => layer.IsEnabledInHierarchy)
                 .ToArray();
             if (layers.Length == 0)
             {

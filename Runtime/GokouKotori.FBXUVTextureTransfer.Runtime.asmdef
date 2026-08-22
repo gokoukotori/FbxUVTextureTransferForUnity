@@ -2,7 +2,8 @@
     "name": "GokouKotori.FBXUVTextureTransfer.Runtime",
     "rootNamespace": "GokouKotori.FBXUVTextureTransfer",
     "references": [
-        "net.rs64.tex-trans-tool.runtime"
+        "net.rs64.tex-trans-tool.runtime",
+        "nadena.dev.ndmf.runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
