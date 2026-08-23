@@ -116,7 +116,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
             string error;
             var root = property.objectReferenceValue as GameObject;
-            if (!FBXUVModelPrefabReferenceUtility.TryValidateRoot(root, out error))
+            if (!FBXUVModelPrefabReferenceUtility.TryResolveRoot(root, out _, out error))
             {
                 EditorGUILayout.HelpBox(error, MessageType.Error);
             }

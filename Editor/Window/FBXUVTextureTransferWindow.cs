@@ -469,7 +469,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
 
             var targetRoot = layer == null ? null : layer.TargetModelOrPrefab;
-            if (!FBXUVModelPrefabReferenceUtility.TryValidateRoot(targetRoot, out var rootError))
+            if (!FBXUVModelPrefabReferenceUtility.TryResolveRoot(targetRoot, out _, out var rootError))
             {
                 return $"Target Model / Prefab: {rootError} 既存のTarget Region値は保持しています。";
             }
@@ -487,7 +487,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         private string CreateSourceSelectionWarning(ViewState state, int optionCount)
         {
             var sourceRoot = layer == null ? null : layer.SourceModelOrPrefab;
-            if (!FBXUVModelPrefabReferenceUtility.TryValidateRoot(sourceRoot, out var rootError))
+            if (!FBXUVModelPrefabReferenceUtility.TryResolveRoot(sourceRoot, out _, out var rootError))
             {
                 return $"Source Model / Prefab: {rootError} 既存のSource Region値は保持しています。";
             }
@@ -1030,7 +1030,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private List<(string Label, Mesh Mesh)> CollectSourceMeshes()
         {
-            var root = layer == null ? null : layer.SourceModelOrPrefab;
+            var reference = layer == null ? null : layer.SourceModelOrPrefab;
+            FBXUVModelPrefabReferenceUtility.TryResolveRoot(reference, out var root, out _);
             if (sourceCandidateCacheValid && ReferenceEquals(sourceCandidateRoot, root))
             {
                 return sourceCandidateCache;
@@ -1038,7 +1039,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
             sourceCandidateRoot = root;
             sourceCandidateCacheValid = true;
-            sourceCandidateCache = FBXUVModelPrefabReferenceUtility.TryValidateRoot(root, out _)
+            sourceCandidateCache = root != null
                 ? FBXUVModelPrefabReferenceUtility.CollectMeshes(root)
                 : new List<(string Label, Mesh Mesh)>();
             sourceCandidateLabels = new string[sourceCandidateCache.Count];
@@ -1070,6 +1071,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private void EnsureTargetCandidateCache(GameObject root, Texture targetTexture)
         {
+            FBXUVModelPrefabReferenceUtility.TryResolveRoot(root, out root, out _);
             if (targetCandidateCacheValid &&
                 ReferenceEquals(targetCandidateRoot, root) &&
                 ReferenceEquals(targetCandidateTexture, targetTexture))
@@ -1080,7 +1082,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             targetCandidateRoot = root;
             targetCandidateTexture = targetTexture;
             targetCandidateCacheValid = true;
-            targetCandidateCache = FBXUVModelPrefabReferenceUtility.TryValidateRoot(root, out _)
+            targetCandidateCache = root != null
                 ? FBXUVTargetMeshCollector.Collect(root, targetTexture)
                 : new List<FBXUVTargetMeshCandidate>();
             targetOptionCache = new List<TargetMeshOption>();

@@ -52,12 +52,25 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
             if (layer.TargetModelOrPrefab != null)
             {
-                error = string.Empty;
-                return true;
+                if (TryResolveRoot(layer.TargetModelOrPrefab, out _, out error))
+                {
+                    error = string.Empty;
+                    return true;
+                }
+
+                return false;
             }
 
             if (!TryResolveTargetRoot(layer, out var targetRoot, out error)) return false;
 
+            return AssignTargetRoot(layer, targetRoot, out changed);
+        }
+
+        private static bool AssignTargetRoot(
+            FBXUVTextureTransferLayer layer,
+            GameObject targetRoot,
+            out bool changed)
+        {
             var serializedLayer = new SerializedObject(layer);
             serializedLayer.Update();
             serializedLayer.FindProperty("targetModelOrPrefab").objectReferenceValue = targetRoot;
@@ -102,6 +115,38 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
             error = "通常Prefab、Model Prefab、またはPrefab Variantのmain rootを指定してください。";
             return false;
+        }
+
+        internal static bool TryResolveRoot(
+            GameObject reference,
+            out GameObject root,
+            out string error)
+        {
+            root = null;
+            if (TryValidateRoot(reference, out error))
+            {
+                root = reference;
+                return true;
+            }
+
+            if (reference == null || EditorUtility.IsPersistent(reference) || AssetDatabase.Contains(reference))
+            {
+                return false;
+            }
+
+            // Unity remaps a Prefab asset's self-reference to its Scene instance root.
+            // Only canonicalize that exact root; arbitrary Scene objects and Prefab children remain invalid.
+            var instanceRoot = PrefabUtility.GetNearestPrefabInstanceRoot(reference);
+            if (instanceRoot != reference) return false;
+
+            var assetPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(reference);
+            var assetRoot = string.IsNullOrEmpty(assetPath)
+                ? null
+                : AssetDatabase.LoadMainAssetAtPath(assetPath) as GameObject;
+            if (!TryValidateRoot(assetRoot, out error)) return false;
+
+            root = assetRoot;
+            return true;
         }
 
         internal static List<(string Label, Mesh Mesh)> CollectMeshes(GameObject root)

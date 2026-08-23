@@ -2,6 +2,12 @@
 
 このプロジェクトの主な変更はこのファイルに記録します。
 
+## [0.1.3] - 2026-08-23
+
+### Fixed
+
+- Prefab VariantをSceneへ配置した際、Model / Prefabの自己参照がScene Objectとして誤判定され、UV Region Editorで新規Region BindingのSource / Target Mesh候補を選択できない問題を修正。
+
 ## [0.1.2] - 2026-08-22
 
 ### Fixed

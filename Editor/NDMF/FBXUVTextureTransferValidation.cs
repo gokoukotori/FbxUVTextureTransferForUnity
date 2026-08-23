@@ -82,18 +82,20 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             }
 
             var serializedLayer = new SerializedObject(layer);
-            var sourceModelOrPrefab = ObjectReference<GameObject>(serializedLayer, "sourceModelOrPrefab");
-            var targetModelOrPrefab = ObjectReference<GameObject>(serializedLayer, "targetModelOrPrefab");
-            var isSourceRootValid = ValidateModelOrPrefabRoot(
-                sourceModelOrPrefab,
+            var sourceModelOrPrefabReference = ObjectReference<GameObject>(serializedLayer, "sourceModelOrPrefab");
+            var targetModelOrPrefabReference = ObjectReference<GameObject>(serializedLayer, "targetModelOrPrefab");
+            var isSourceRootValid = TryResolveModelOrPrefabRoot(
+                sourceModelOrPrefabReference,
                 "Source",
                 layer,
-                issues);
-            var isTargetRootValid = ValidateModelOrPrefabRoot(
-                targetModelOrPrefab,
+                issues,
+                out var sourceModelOrPrefab);
+            var isTargetRootValid = TryResolveModelOrPrefabRoot(
+                targetModelOrPrefabReference,
                 "Target",
                 layer,
-                issues);
+                issues,
+                out var targetModelOrPrefab);
             var targetCandidates = isTargetRootValid && targetTexture != null
                 ? FBXUVTargetMeshCollector.Collect(targetModelOrPrefab, targetTexture)
                 : null;
@@ -209,21 +211,23 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             return issues;
         }
 
-        private static bool ValidateModelOrPrefabRoot(
-            GameObject root,
+        private static bool TryResolveModelOrPrefabRoot(
+            GameObject reference,
             string label,
             Object contextObject,
-            ICollection<FBXUVTransferValidationIssue> issues)
+            ICollection<FBXUVTransferValidationIssue> issues,
+            out GameObject root)
         {
-            if (root == null)
+            root = null;
+            if (reference == null)
             {
                 Add(issues, $"{label} Model/Prefab が未設定です。コンポーネントでProject内のModelまたはPrefabのメインルートを指定してください。", contextObject);
                 return false;
             }
 
-            if (FBXUVModelPrefabReferenceUtility.TryValidateRoot(root, out var error)) return true;
+            if (FBXUVModelPrefabReferenceUtility.TryResolveRoot(reference, out root, out var error)) return true;
 
-            Add(issues, $"{label} Model/Prefab が無効です: {error}", root);
+            Add(issues, $"{label} Model/Prefab が無効です: {error}", reference);
             return false;
         }
 
