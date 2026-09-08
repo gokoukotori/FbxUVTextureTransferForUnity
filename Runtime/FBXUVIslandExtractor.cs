@@ -26,6 +26,8 @@ namespace GokouKotori.FBXUVTextureTransfer
     public static class FBXUVIslandExtractor
     {
         public const float EdgeQuantizationEpsilon = 0.000001f;
+        private const double RelativeDegeneracyEpsilon = 1e-12;
+        private const double BarycentricEpsilon = 1e-6;
 
         public static List<FBXUVIsland> Extract(Mesh mesh, int subMeshIndex, int uvChannel)
         {
@@ -84,16 +86,33 @@ namespace GokouKotori.FBXUVTextureTransfer
 
         public static bool ContainsPoint(FBXUVTriangle triangle, Vector2 point)
         {
-            if (triangle == null) return false;
-            var denominator = ((triangle.b.y - triangle.c.y) * (triangle.a.x - triangle.c.x))
-                + ((triangle.c.x - triangle.b.x) * (triangle.a.y - triangle.c.y));
-            if (Mathf.Abs(denominator) < EdgeQuantizationEpsilon) return false;
-            var alpha = (((triangle.b.y - triangle.c.y) * (point.x - triangle.c.x))
-                + ((triangle.c.x - triangle.b.x) * (point.y - triangle.c.y))) / denominator;
-            var beta = (((triangle.c.y - triangle.a.y) * (point.x - triangle.c.x))
-                + ((triangle.a.x - triangle.c.x) * (point.y - triangle.c.y))) / denominator;
-            var gamma = 1f - alpha - beta;
-            return alpha >= -EdgeQuantizationEpsilon && beta >= -EdgeQuantizationEpsilon && gamma >= -EdgeQuantizationEpsilon;
+            if (triangle == null || !IsFinite(triangle.a) || !IsFinite(triangle.b)
+                || !IsFinite(triangle.c) || !IsFinite(point)) return false;
+
+            // Cast before subtraction so small UV triangles do not lose precision in float arithmetic.
+            var acX = (double)triangle.a.x - triangle.c.x;
+            var acY = (double)triangle.a.y - triangle.c.y;
+            var bcX = (double)triangle.b.x - triangle.c.x;
+            var bcY = (double)triangle.b.y - triangle.c.y;
+            var abX = (double)triangle.a.x - triangle.b.x;
+            var abY = (double)triangle.a.y - triangle.b.y;
+            var denominator = acX * bcY - acY * bcX;
+            var maxEdgeLengthSquared = Math.Max(acX * acX + acY * acY,
+                Math.Max(bcX * bcX + bcY * bcY, abX * abX + abY * abY));
+            if (Math.Abs(denominator) <= maxEdgeLengthSquared * RelativeDegeneracyEpsilon) return false;
+
+            var pcX = (double)point.x - triangle.c.x;
+            var pcY = (double)point.y - triangle.c.y;
+            var alpha = (pcX * bcY - pcY * bcX) / denominator;
+            var beta = (acX * pcY - acY * pcX) / denominator;
+            var gamma = 1.0 - alpha - beta;
+            return alpha >= -BarycentricEpsilon && beta >= -BarycentricEpsilon && gamma >= -BarycentricEpsilon;
+        }
+
+        private static bool IsFinite(Vector2 point)
+        {
+            return !float.IsNaN(point.x) && !float.IsInfinity(point.x)
+                && !float.IsNaN(point.y) && !float.IsInfinity(point.y);
         }
 
         private static List<int>[] BuildAdjacency(IReadOnlyList<FBXUVTriangle> triangles)
@@ -112,13 +131,14 @@ namespace GokouKotori.FBXUVTextureTransfer
             for (var index = 0; index < adjacency.Length; index++) adjacency[index] = new List<int>();
             foreach (var owners in edgeOwners.Values)
             {
-                for (var first = 0; first < owners.Count; first++)
+                // A star preserves connectivity without creating every pair for overlapping UVs.
+                var first = owners[0];
+                for (var index = 1; index < owners.Count; index++)
                 {
-                    for (var second = first + 1; second < owners.Count; second++)
-                    {
-                        adjacency[owners[first]].Add(owners[second]);
-                        adjacency[owners[second]].Add(owners[first]);
-                    }
+                    var other = owners[index];
+                    if (other == first) continue;
+                    adjacency[first].Add(other);
+                    adjacency[other].Add(first);
                 }
             }
 

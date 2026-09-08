@@ -54,6 +54,7 @@ jobs:
         with:
           tag_name: ${{ steps.package.outputs.version }}
           name: ${{ steps.package.outputs.version }}
+          prerelease: ${{ contains(steps.package.outputs.version, '-') }}
           files: |
             ${{ steps.package.outputs.zip_file }}
             package.json

@@ -50,7 +50,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
 
             foreach (var layer in layers)
             {
-                Report(FBXUVTextureTransferValidation.ValidateLayer(layer, false));
+                Report(FBXUVTextureTransferValidation.ValidateLayerForBuild(layer, context.AvatarRootObject));
             }
         }
 

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using GokouKotori.FBXUVTextureTransfer.Editor.NDMF;
-using net.rs64.TexTransTool.MultiLayerImage;
 using UnityEditor;
 using UnityEditorInternal;
 using UnityEngine;
@@ -60,11 +59,11 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 serializedObject.UpdateIfRequiredOrScript();
                 DrawModelPrefabReference(
                     serializedObject.FindProperty("sourceModelOrPrefab"),
-                    new GUIContent("Source Model / Prefab"));
+                    new GUIContent("転送元 Model / Prefab"));
                 var targetModelOrPrefab = serializedObject.FindProperty("targetModelOrPrefab");
                 DrawModelPrefabReference(
                     targetModelOrPrefab,
-                    new GUIContent("Target Model / Prefab"));
+                    new GUIContent("転送先 Model / Prefab"));
                 if (targetModelOrPrefab.objectReferenceValue != null)
                 {
                     targetAutoResolutionError = string.Empty;
@@ -72,12 +71,12 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 if (!string.IsNullOrEmpty(targetAutoResolutionError))
                 {
                     EditorGUILayout.HelpBox(
-                        $"Targetを自動決定できません: {targetAutoResolutionError}",
+                        $"転送先を自動決定できません: {targetAutoResolutionError}",
                         MessageType.Warning);
                 }
                 EditorGUILayout.PropertyField(
                     serializedObject.FindProperty("defaultSourceTexture"),
-                    new GUIContent("source Texture"));
+                    new GUIContent("転送元テクスチャ"));
 
                 EditorGUILayout.Space(4f);
                 bindingList?.DoLayoutList();
@@ -88,7 +87,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                         MessageType.Warning);
                 }
 
-                if (GUILayout.Button("UV Region Editorを開く"))
+                if (GUILayout.Button("UV領域エディターを開く"))
                 {
                     FBXUVTextureTransferWindow.Open((FBXUVTextureTransferLayer)target);
                 }
@@ -167,7 +166,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
             var orientationPopupRect = EditorGUI.PrefixLabel(
                 orientationRect,
-                new GUIContent("向き補正", "Source画像をTarget regionへ配置する向きを手動で指定します。"));
+                new GUIContent("向き補正", "転送元画像を転送先の領域へ配置する向きを手動で指定します。"));
             var currentIndex = OrientationPopupIndex(orientation.intValue);
             EditorGUI.BeginChangeCheck();
             var selectedIndex = EditorGUI.Popup(
@@ -216,7 +215,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             var regionName = binding.FindPropertyRelative("name").stringValue;
             if (!EditorUtility.DisplayDialog(
                     "Regionを削除",
-                    $"「{regionName}」を削除しますか？\nSource/TargetのUV Island選択も削除されます。",
+                    $"「{regionName}」を削除しますか？\n転送元／転送先のUV島の選択も削除されます。",
                     "削除",
                     "キャンセル"))
             {
@@ -246,19 +245,16 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         private void DrawCanvasTarget(FBXUVTextureTransferLayer transferLayer)
         {
             EditorGUILayout.Space(6f);
-            var canvas = FindParentCanvas(transferLayer.transform);
-            if (canvas == null)
+            if (!FBXUVCanvasHierarchyUtility.TryFindCanvas(transferLayer, out var canvas, out var error, out _))
             {
-                EditorGUILayout.HelpBox(
-                    "MultiLayerImageCanvas直下、またはLayerFolderだけを経由した子階層に配置してください。",
-                    MessageType.Error);
+                EditorGUILayout.HelpBox(error, MessageType.Error);
                 return;
             }
 
             using (new EditorGUI.DisabledScope(true))
             {
                 EditorGUILayout.ObjectField(
-                    "親MLICのTargetTexture",
+                    "Canvasの対象テクスチャ",
                     canvas.TargetTexture?.SelectTexture,
                     typeof(Texture2D),
                     false);
@@ -311,17 +307,5 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
         }
 
-        private static MultiLayerImageCanvas FindParentCanvas(Transform transform)
-        {
-            var current = transform.parent;
-            while (current != null)
-            {
-                var canvas = current.GetComponent<MultiLayerImageCanvas>();
-                if (canvas != null) return canvas;
-                if (current.GetComponent<LayerFolder>() == null) return null;
-                current = current.parent;
-            }
-            return null;
-        }
     }
 }

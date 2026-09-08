@@ -4,13 +4,13 @@ using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
+using MeshBuffers = GokouKotori.FBXUVTextureTransfer.FBXUVRenderResources.MeshBuffers;
 
 namespace GokouKotori.FBXUVTextureTransfer
 {
     public static class FBXUVTextureTransferRenderer
     {
         public const int BleedPixels = 4;
-        private const int ThreadGroupSize = 8;
         private static readonly ProfilerMarker RenderMarker = new ProfilerMarker("FBXUVTextureTransfer.Render");
         private static readonly ProfilerMarker RenderRegionMarker = new ProfilerMarker("FBXUVTextureTransfer.RenderRegion");
         private static readonly ProfilerMarker FillAndBleedMarker = new ProfilerMarker("FBXUVTextureTransfer.FillAndBleed");
@@ -46,41 +46,15 @@ namespace GokouKotori.FBXUVTextureTransfer
             if (shader == null || computeShader == null) return;
 
             using (RenderMarker.Auto())
+            using (var resources = new FBXUVRenderResources(shader, computeShader))
             {
-                Material material = null;
-                Mesh transferMesh = null;
-                Mesh maskMesh = null;
-                try
+                for (var index = 0; index < layer.regionBindings.Count; index++)
                 {
-                    material = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
-                    transferMesh = CreateReusableMesh("FBXUV Transfer Mesh");
-                    maskMesh = CreateReusableMesh("FBXUV Mask Mesh");
-                    var buffers = new MeshBuffers();
-                    var kernels = new ComputeKernels(computeShader);
-                    for (var index = 0; index < layer.regionBindings.Count; index++)
-                    {
-                        var binding = layer.regionBindings[index];
-                        if (binding == null || !binding.enabled || string.IsNullOrWhiteSpace(binding.name)) continue;
-                        if (binding.sourceRegion == null || binding.targetRegion == null) continue;
-                        RenderRegionCore(
-                            layer.defaultSourceTexture,
-                            binding.sourceRegion,
-                            binding.targetRegion,
-                            binding.orientation,
-                            destination,
-                            material,
-                            computeShader,
-                            kernels,
-                            transferMesh,
-                            maskMesh,
-                            buffers);
-                    }
-                }
-                finally
-                {
-                    if (maskMesh != null) UnityEngine.Object.DestroyImmediate(maskMesh);
-                    if (transferMesh != null) UnityEngine.Object.DestroyImmediate(transferMesh);
-                    if (material != null) UnityEngine.Object.DestroyImmediate(material);
+                    var binding = layer.regionBindings[index];
+                    if (binding == null || !binding.enabled || string.IsNullOrWhiteSpace(binding.name)) continue;
+                    if (binding.sourceRegion == null || binding.targetRegion == null) continue;
+                    RenderRegionCore(layer.defaultSourceTexture, binding.sourceRegion, binding.targetRegion,
+                        binding.orientation, destination, resources);
                 }
             }
         }
@@ -120,34 +94,9 @@ namespace GokouKotori.FBXUVTextureTransfer
             if (pixelProcessShader == null) throw new ArgumentNullException(nameof(pixelProcessShader));
 
             using (RenderMarker.Auto())
+            using (var resources = new FBXUVRenderResources(triangleShader, pixelProcessShader))
             {
-                Material material = null;
-                Mesh transferMesh = null;
-                Mesh maskMesh = null;
-                try
-                {
-                    material = new Material(triangleShader) { hideFlags = HideFlags.HideAndDontSave };
-                    transferMesh = CreateReusableMesh("FBXUV Transfer Mesh");
-                    maskMesh = CreateReusableMesh("FBXUV Mask Mesh");
-                    RenderRegionCore(
-                        sourceTexture,
-                        sourceRegion,
-                        targetRegion,
-                        orientation,
-                        destination,
-                        material,
-                        pixelProcessShader,
-                        new ComputeKernels(pixelProcessShader),
-                        transferMesh,
-                        maskMesh,
-                        new MeshBuffers());
-                }
-                finally
-                {
-                    if (maskMesh != null) UnityEngine.Object.DestroyImmediate(maskMesh);
-                    if (transferMesh != null) UnityEngine.Object.DestroyImmediate(transferMesh);
-                    if (material != null) UnityEngine.Object.DestroyImmediate(material);
-                }
+                RenderRegionCore(sourceTexture, sourceRegion, targetRegion, orientation, destination, resources);
             }
         }
 
@@ -178,17 +127,8 @@ namespace GokouKotori.FBXUVTextureTransfer
                     seedA = GetSeedTemporary(source.width, source.height, "FBXUV Seed A");
                     seedB = GetSeedTemporary(source.width, source.height, "FBXUV Seed B");
                     ping = GetColorTemporary(destination, source.width, source.height, "FBXUV Fill Ping");
-                    var kernels = new ComputeKernels(pixelProcessShader);
-                    var resolved = FillTransparentTargetPixels(source, targetMask, ping, seedA, seedB, pixelProcessShader, kernels);
-                    var current = resolved;
-                    var other = destination;
-                    for (var pass = 0; pass < bleedPixels; pass++)
-                    {
-                        Dilate(current, targetMask, other, pixelProcessShader, kernels);
-                        var swap = current;
-                        current = other;
-                        other = swap;
-                    }
+                    var pixels = new FBXUVPixelProcessor(pixelProcessShader);
+                    var current = pixels.FillAndBleed(source, targetMask, ping, destination, seedA, seedB, bleedPixels);
                     if (current != destination) Graphics.Blit(current, destination);
                 }
                 finally
@@ -206,12 +146,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             FBXUVTransferRegion targetRegion,
             FBXUVTransferOrientation orientation,
             RenderTexture destination,
-            Material material,
-            ComputeShader pixelProcessShader,
-            ComputeKernels kernels,
-            Mesh transferMesh,
-            Mesh maskMesh,
-            MeshBuffers buffers)
+            FBXUVRenderResources resources)
         {
             using (RenderRegionMarker.Auto())
             {
@@ -244,23 +179,14 @@ namespace GokouKotori.FBXUVTextureTransfer
                         destination.height,
                         orientation);
                     if (vertexMap.Count == 0) return;
-                    UpdateTransferMesh(transferMesh, sourceTriangles, vertexMap, pixelBounds.Left, pixelBounds.Top, buffers);
-                    UpdateMaskMesh(maskMesh, targetTriangles, destination.width, destination.height, pixelBounds.Left, pixelBounds.Top, buffers);
-                    DrawMaskMesh(maskMesh, mask, material);
-                    DrawCoverageMesh(transferMesh, mask, material);
-                    DrawTransferMesh(transferMesh, sourceTexture, region, material);
+                    UpdateTransferMesh(resources.TransferMesh, sourceTriangles, vertexMap, pixelBounds.Left, pixelBounds.Top, resources.Buffers);
+                    UpdateMaskMesh(resources.MaskMesh, targetTriangles, destination.width, destination.height, pixelBounds.Left, pixelBounds.Top, resources.Buffers);
+                    DrawMaskMesh(resources.MaskMesh, mask, resources.Material);
+                    DrawCoverageMesh(resources.TransferMesh, mask, resources.Material);
+                    DrawTransferMesh(resources.TransferMesh, sourceTexture, region, resources.Material);
 
-                    FillTransparentTargetPixels(region, mask, work, seedA, seedB, pixelProcessShader, kernels);
-                    var input = work;
-                    var output = region;
-                    for (var pass = 0; pass < BleedPixels; pass++)
-                    {
-                        Dilate(input, mask, output, pixelProcessShader, kernels);
-                        var swap = input;
-                        input = output;
-                        output = swap;
-                    }
-                    CompositeStraightAlpha(input, destination, pixelBounds.Left, pixelBounds.Top, pixelProcessShader, kernels);
+                    var filled = resources.Pixels.FillAndBleed(region, mask, work, region, seedA, seedB, BleedPixels);
+                    resources.Pixels.CompositeStraightAlpha(filled, destination, pixelBounds.Left, pixelBounds.Top);
                 }
                 finally
                 {
@@ -333,11 +259,6 @@ namespace GokouKotori.FBXUVTextureTransfer
             UpdateMesh(mesh, buffers, count);
         }
 
-        private static Mesh CreateReusableMesh(string name)
-        {
-            return new Mesh { name = name, hideFlags = HideFlags.HideAndDontSave };
-        }
-
         private static void UpdateMesh(Mesh mesh, MeshBuffers buffers, int vertexCount)
         {
             mesh.Clear();
@@ -380,96 +301,6 @@ namespace GokouKotori.FBXUVTextureTransfer
             {
                 Graphics.SetRenderTarget(previous);
             }
-        }
-
-        private static RenderTexture FillTransparentTargetPixels(
-            RenderTexture source,
-            RenderTexture mask,
-            RenderTexture output,
-            RenderTexture seedA,
-            RenderTexture seedB,
-            ComputeShader computeShader,
-            ComputeKernels kernels)
-        {
-            var initialize = kernels.InitializeSeeds;
-            SetTextureSize(computeShader, source.width, source.height);
-            computeShader.SetTexture(initialize, "_Source", source);
-            computeShader.SetTexture(initialize, "_Mask", mask);
-            computeShader.SetTexture(initialize, "_SeedWrite", seedA);
-            Dispatch(computeShader, initialize, source.width, source.height);
-
-            var propagate = kernels.PropagateSeeds;
-            var read = seedA;
-            var write = seedB;
-            for (var jump = HighestJump(source.width, source.height); jump >= 1; jump >>= 1)
-            {
-                computeShader.SetInt("_Jump", jump);
-                computeShader.SetTexture(propagate, "_Mask", mask);
-                computeShader.SetTexture(propagate, "_SeedRead", read);
-                computeShader.SetTexture(propagate, "_SeedWrite", write);
-                Dispatch(computeShader, propagate, source.width, source.height);
-                var swap = read;
-                read = write;
-                write = swap;
-            }
-
-            var resolve = kernels.ResolveFill;
-            computeShader.SetTexture(resolve, "_Source", source);
-            computeShader.SetTexture(resolve, "_Mask", mask);
-            computeShader.SetTexture(resolve, "_SeedRead", read);
-            computeShader.SetTexture(resolve, "_Output", output);
-            Dispatch(computeShader, resolve, source.width, source.height);
-            return output;
-        }
-
-        private static void Dilate(
-            RenderTexture source,
-            RenderTexture mask,
-            RenderTexture output,
-            ComputeShader computeShader,
-            ComputeKernels kernels)
-        {
-            var kernel = kernels.Dilate8Connected;
-            SetTextureSize(computeShader, source.width, source.height);
-            computeShader.SetTexture(kernel, "_Source", source);
-            computeShader.SetTexture(kernel, "_Mask", mask);
-            computeShader.SetTexture(kernel, "_Output", output);
-            Dispatch(computeShader, kernel, source.width, source.height);
-        }
-
-        private static void CompositeStraightAlpha(
-            RenderTexture source,
-            RenderTexture destination,
-            int offsetX,
-            int offsetY,
-            ComputeShader computeShader,
-            ComputeKernels kernels)
-        {
-            var kernel = kernels.CompositeStraightAlpha;
-            SetTextureSize(computeShader, source.width, source.height);
-            computeShader.SetInts("_DestinationOffset", offsetX, offsetY);
-            computeShader.SetInts("_DestinationSize", destination.width, destination.height);
-            computeShader.SetTexture(kernel, "_Source", source);
-            computeShader.SetTexture(kernel, "_Destination", destination);
-            Dispatch(computeShader, kernel, source.width, source.height);
-        }
-
-        private static void SetTextureSize(ComputeShader shader, int width, int height)
-        {
-            shader.SetInts("_TextureSize", width, height);
-        }
-
-        private static void Dispatch(ComputeShader shader, int kernel, int width, int height)
-        {
-            shader.Dispatch(kernel, (width + ThreadGroupSize - 1) / ThreadGroupSize, (height + ThreadGroupSize - 1) / ThreadGroupSize, 1);
-        }
-
-        private static int HighestJump(int width, int height)
-        {
-            var maximum = Mathf.Max(width, height);
-            var jump = 1;
-            while (jump < maximum && jump <= (int.MaxValue >> 1)) jump <<= 1;
-            return Mathf.Max(1, jump >> 1);
         }
 
         private static PixelBounds GetExpandedPixelBounds(FBXUVBounds bounds, int width, int height, int padding)
@@ -547,83 +378,6 @@ namespace GokouKotori.FBXUVTextureTransfer
         {
             if (texture == null) return;
             RenderTexture.ReleaseTemporary(texture);
-        }
-
-        private sealed class MeshBuffers
-        {
-            public readonly List<Vector3> Positions = new List<Vector3>();
-            public readonly List<Vector2> Uvs = new List<Vector2>();
-            public readonly List<int> Indices = new List<int>();
-
-            public void Prepare(int capacity)
-            {
-                Positions.Clear();
-                Uvs.Clear();
-                Indices.Clear();
-                EnsureCapacity(Positions, capacity);
-                EnsureCapacity(Uvs, capacity);
-                EnsureCapacity(Indices, capacity);
-            }
-
-            private static void EnsureCapacity<T>(List<T> list, int capacity)
-            {
-                if (list.Capacity < capacity) list.Capacity = capacity;
-            }
-        }
-
-        private sealed class ComputeKernels
-        {
-            private readonly ComputeShader shader;
-            private int initializeSeeds;
-            private int propagateSeeds;
-            private int resolveFill;
-            private int dilate8Connected;
-            private int compositeStraightAlpha;
-            private bool hasInitializeSeeds;
-            private bool hasPropagateSeeds;
-            private bool hasResolveFill;
-            private bool hasDilate8Connected;
-            private bool hasCompositeStraightAlpha;
-
-            public ComputeKernels(ComputeShader shader)
-            {
-                this.shader = shader;
-            }
-
-            public int InitializeSeeds
-            {
-                get { return Resolve("InitializeSeeds", ref initializeSeeds, ref hasInitializeSeeds); }
-            }
-
-            public int PropagateSeeds
-            {
-                get { return Resolve("PropagateSeeds", ref propagateSeeds, ref hasPropagateSeeds); }
-            }
-
-            public int ResolveFill
-            {
-                get { return Resolve("ResolveFill", ref resolveFill, ref hasResolveFill); }
-            }
-
-            public int Dilate8Connected
-            {
-                get { return Resolve("Dilate8Connected", ref dilate8Connected, ref hasDilate8Connected); }
-            }
-
-            public int CompositeStraightAlpha
-            {
-                get { return Resolve("CompositeStraightAlpha", ref compositeStraightAlpha, ref hasCompositeStraightAlpha); }
-            }
-
-            private int Resolve(string name, ref int kernel, ref bool resolved)
-            {
-                if (!resolved)
-                {
-                    kernel = shader.FindKernel(name);
-                    resolved = true;
-                }
-                return kernel;
-            }
         }
 
         private struct PixelBounds

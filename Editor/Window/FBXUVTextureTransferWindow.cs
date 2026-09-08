@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using GokouKotori.FBXUVTextureTransfer;
-using net.rs64.TexTransTool.MultiLayerImage;
 using UnityEditor;
 using UnityEngine;
 using Unity.Profiling;
@@ -46,64 +44,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             [NonSerialized] public bool hasPendingRegionSelection;
         }
 
-        private readonly struct MeshAnalysisKey : IEquatable<MeshAnalysisKey>
-        {
-            internal readonly Mesh Mesh;
-            internal readonly int SubMeshIndex;
-            internal readonly int UvChannel;
-
-            internal MeshAnalysisKey(Mesh mesh, int subMeshIndex, int uvChannel)
-            {
-                Mesh = mesh;
-                SubMeshIndex = subMeshIndex;
-                UvChannel = uvChannel;
-            }
-
-            public bool Equals(MeshAnalysisKey other)
-            {
-                return ReferenceEquals(Mesh, other.Mesh) &&
-                       SubMeshIndex == other.SubMeshIndex &&
-                       UvChannel == other.UvChannel;
-            }
-
-            public override bool Equals(object obj)
-            {
-                return obj is MeshAnalysisKey other && Equals(other);
-            }
-
-            public override int GetHashCode()
-            {
-                unchecked
-                {
-                    var hash = ReferenceEquals(Mesh, null) ? 0 : RuntimeHelpers.GetHashCode(Mesh);
-                    hash = (hash * 397) ^ SubMeshIndex;
-                    return (hash * 397) ^ UvChannel;
-                }
-            }
-        }
-
-        private sealed class MeshAnalysisEntry
-        {
-            internal FBXUVMeshAnalysis Analysis;
-            internal bool IslandsResolved;
-            internal List<FBXUVIsland> Islands;
-            internal string IslandError;
-        }
-
-        private readonly struct TargetMeshOption
-        {
-            internal readonly string Label;
-            internal readonly Mesh Mesh;
-            internal readonly int SubMeshIndex;
-
-            internal TargetMeshOption(string label, Mesh mesh, int subMeshIndex)
-            {
-                Label = label;
-                Mesh = mesh;
-                SubMeshIndex = subMeshIndex;
-            }
-        }
-
         [SerializeField] private FBXUVTextureTransferLayer layer;
         [SerializeField] private ViewState sourceView = new ViewState();
         [SerializeField] private ViewState targetView = new ViewState();
@@ -116,29 +56,15 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         [NonSerialized] private Texture2D cachedTargetTexture;
         [NonSerialized] private RegionReconcileRequest regionReconcileRequest;
 
-        private readonly Dictionary<MeshAnalysisKey, MeshAnalysisEntry> meshAnalysisCache =
-            new Dictionary<MeshAnalysisKey, MeshAnalysisEntry>();
-        private FBXUVMeshAnalysisCache meshAnalysisSource = new FBXUVMeshAnalysisCache();
+        private FBXUVMeshAnalysisCache meshAnalysisCache = new FBXUVMeshAnalysisCache();
         private readonly Vector3[] triangleLinePoints = new Vector3[4];
         private readonly Vector3[] frameLinePoints = new Vector3[5];
 
-        private bool sourceCandidateCacheValid;
-        private GameObject sourceCandidateRoot;
-        private List<(string Label, Mesh Mesh)> sourceCandidateCache;
-        private string[] sourceCandidateLabels;
-        private string[] sourceReplacementLabels;
-
-        private bool targetCandidateCacheValid;
-        private GameObject targetCandidateRoot;
-        private Texture targetCandidateTexture;
-        private List<FBXUVTargetMeshCandidate> targetCandidateCache;
-        private List<TargetMeshOption> targetOptionCache;
-        private string[] targetOptionLabels;
-        private string[] targetReplacementLabels;
+        private readonly FBXUVMeshCandidateCache candidateCache = new FBXUVMeshCandidateCache();
         private bool regionNameLabelsValid;
         private string[] regionNameLabels;
 
-        internal int MeshAnalysisCacheCount => meshAnalysisCache.Count;
+        internal int MeshAnalysisCacheCount => meshAnalysisCache.AnalysisCount;
         internal SerializedObject CachedSerializedLayer => serializedLayer;
 
         [MenuItem("Tools/FBX UV Texture Transfer/UV Region Editor")]
@@ -163,6 +89,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             targetView ??= new ViewState();
             EditorApplication.projectChanged -= OnProjectChanged;
             EditorApplication.projectChanged += OnProjectChanged;
+            EditorApplication.hierarchyChanged -= OnHierarchyChanged;
+            EditorApplication.hierarchyChanged += OnHierarchyChanged;
             Undo.undoRedoPerformed -= OnUndoRedoPerformed;
             Undo.undoRedoPerformed += OnUndoRedoPerformed;
             InitializeFromLayer();
@@ -171,6 +99,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         private void OnDisable()
         {
             EditorApplication.projectChanged -= OnProjectChanged;
+            EditorApplication.hierarchyChanged -= OnHierarchyChanged;
             Undo.undoRedoPerformed -= OnUndoRedoPerformed;
         }
 
@@ -178,6 +107,12 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             InvalidateAllCaches();
             RequestRegionReconcile(RegionReconcileRequest.PreservePendingSelections);
+            Repaint();
+        }
+
+        private void OnHierarchyChanged()
+        {
+            InvalidateCandidateCaches();
             Repaint();
         }
 
@@ -263,7 +198,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             EditorGUI.BeginChangeCheck();
             var next = (FBXUVTextureTransferLayer)EditorGUILayout.ObjectField(
-                "編集するLayer",
+                "編集中",
                 layer,
                 typeof(FBXUVTextureTransferLayer),
                 true);
@@ -277,7 +212,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         private bool DrawRegionSelection(SerializedObject serializedLayer)
         {
             EditorGUILayout.Space(8f);
-            EditorGUILayout.LabelField("UV Island Mapping", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("UV島の対応付け", EditorStyles.boldLabel);
             var names = CollectRegionNames(serializedLayer);
             if (names.Length == 0)
             {
@@ -316,13 +251,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.Width(width)))
             {
-                EditorGUILayout.LabelField(side == Side.Source ? "Source UV" : "Target UV", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField(side == Side.Source ? "転送元UV" : "転送先UV", EditorStyles.boldLabel);
                 DrawMeshSelection(side, state);
                 if (side == Side.Target)
                 {
                     EditorGUI.BeginChangeCheck();
                     state.backgroundTexture = (Texture2D)EditorGUILayout.ObjectField(
-                        "背景Texture",
+                        "背景テクスチャ",
                         state.backgroundTexture,
                         typeof(Texture2D),
                         false);
@@ -343,7 +278,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 else
                 {
                     EditorGUILayout.LabelField(
-                        $"island: {(state.islands?.Count ?? 0)} / 選択: {(state.selectedIslandId < 0 ? "なし" : state.selectedIslandId.ToString())}");
+                        $"UV島: {(state.islands?.Count ?? 0)} / 選択: {(state.selectedIslandId < 0 ? "なし" : state.selectedIslandId.ToString())}");
                 }
             }
         }
@@ -366,7 +301,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (meshIndex >= 0)
             {
                 EditorGUI.BeginChangeCheck();
-                meshIndex = EditorGUILayout.Popup("Mesh", meshIndex, sourceCandidateLabels);
+                meshIndex = EditorGUILayout.Popup("メッシュ", meshIndex, candidateCache.Source.Labels);
                 if (EditorGUI.EndChangeCheck())
                 {
                     ApplyMeshSelection(state, meshes[meshIndex].Mesh, 0);
@@ -376,14 +311,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             {
                 using (new EditorGUI.DisabledScope(true))
                 {
-                    EditorGUILayout.ObjectField("現在のRegionのMesh", state.mesh, typeof(Mesh), false);
-                    EditorGUILayout.IntField("現在のRegionのSubmesh", state.subMeshIndex);
+                    EditorGUILayout.ObjectField("現在のRegionのメッシュ", state.mesh, typeof(Mesh), false);
+                    EditorGUILayout.IntField("現在のRegionのサブメッシュ", state.subMeshIndex);
                 }
 
                 EditorGUILayout.HelpBox(CreateSourceSelectionWarning(state, meshes.Count), MessageType.Warning);
                 if (meshes.Count > 0)
                 {
-                    var replacementIndex = EditorGUILayout.Popup("Source Mesh", 0, sourceReplacementLabels);
+                    var replacementIndex = EditorGUILayout.Popup("転送元メッシュ", 0, candidateCache.Source.ReplacementLabels);
                     if (replacementIndex > 0)
                     {
                         ApplyMeshSelection(state, meshes[replacementIndex - 1].Mesh, 0);
@@ -395,8 +330,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             {
                 var subMeshCount = state.mesh == null ? 1 : Mathf.Max(1, state.mesh.subMeshCount);
                 EditorGUI.BeginChangeCheck();
-                state.subMeshIndex = EditorGUILayout.IntSlider("Submesh", state.subMeshIndex, 0, subMeshCount - 1);
-                state.uvChannel = EditorGUILayout.IntSlider("UV channel", state.uvChannel, 0, 7);
+                state.subMeshIndex = EditorGUILayout.IntSlider("サブメッシュ", state.subMeshIndex, 0, subMeshCount - 1);
+                state.uvChannel = EditorGUILayout.IntSlider("UVチャンネル", state.uvChannel, 0, 7);
                 if (EditorGUI.EndChangeCheck()) MarkRegionSelectionPending(state);
             }
         }
@@ -414,9 +349,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             {
                 EditorGUI.BeginChangeCheck();
                 selectedIndex = EditorGUILayout.Popup(
-                    "Mesh / Submesh",
+                    "メッシュ / サブメッシュ",
                     selectedIndex,
-                    targetOptionLabels);
+                    candidateCache.Target.Labels);
                 if (EditorGUI.EndChangeCheck())
                 {
                     ApplyMeshSelection(state, options[selectedIndex].Mesh, options[selectedIndex].SubMeshIndex);
@@ -426,8 +361,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             {
                 using (new EditorGUI.DisabledScope(true))
                 {
-                    EditorGUILayout.ObjectField("現在のRegionのMesh", state.mesh, typeof(Mesh), false);
-                    EditorGUILayout.IntField("現在のRegionのSubmesh", state.subMeshIndex);
+                    EditorGUILayout.ObjectField("現在のRegionのメッシュ", state.mesh, typeof(Mesh), false);
+                    EditorGUILayout.IntField("現在のRegionのサブメッシュ", state.subMeshIndex);
                 }
 
                 EditorGUILayout.HelpBox(
@@ -437,9 +372,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 if (options.Count > 0)
                 {
                     var replacementIndex = EditorGUILayout.Popup(
-                        "Target Mesh / Submesh",
+                        "転送先メッシュ / サブメッシュ",
                         0,
-                        targetReplacementLabels);
+                        candidateCache.Target.ReplacementLabels);
                     if (replacementIndex > 0)
                     {
                         var replacement = options[replacementIndex - 1];
@@ -448,21 +383,29 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 }
             }
 
-            using (new EditorGUI.DisabledScope(state.mesh == null))
+            using (new EditorGUI.DisabledScope(state.mesh == null ||
+                       !FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out _, out _, out _)))
             {
                 EditorGUI.BeginChangeCheck();
-                state.uvChannel = EditorGUILayout.IntSlider("UV channel", state.uvChannel, 0, 7);
+                state.uvChannel = EditorGUILayout.IntSlider("UVチャンネル", state.uvChannel, 0, 7);
                 if (EditorGUI.EndChangeCheck()) MarkRegionSelectionPending(state);
             }
         }
 
         private Texture2D ResolveTargetTexture()
         {
-            return layer == null ? null : FindParentCanvas(layer.transform)?.TargetTexture?.SelectTexture;
+            return FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out var canvas, out _, out _)
+                ? canvas.TargetTexture?.SelectTexture
+                : null;
         }
 
         private string CreateTargetSelectionWarning(ViewState state, Texture2D targetTexture, int optionCount)
         {
+            if (!FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out _, out var error, out _))
+            {
+                return $"{error} 既存のTarget Region値は保持しています。";
+            }
+
             if (targetTexture == null)
             {
                 return "親MultiLayerImageCanvasのTargetTextureを設定してください。既存のTarget Region値は保持しています。";
@@ -471,12 +414,12 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             var targetRoot = layer == null ? null : layer.TargetModelOrPrefab;
             if (!FBXUVModelPrefabReferenceUtility.TryResolveRoot(targetRoot, out _, out var rootError))
             {
-                return $"Target Model / Prefab: {rootError} 既存のTarget Region値は保持しています。";
+                return $"転送先 Model / Prefab: {rootError} 既存のTarget Region値は保持しています。";
             }
 
             if (optionCount == 0)
             {
-                return "TargetTextureを参照するMaterialを持つRendererがTarget Model / Prefab配下にありません。既存のTarget Region値は保持しています。";
+                return "TargetTextureを参照するMaterialを持つRendererが転送先 Model / Prefab配下にありません。既存のTarget Region値は保持しています。";
             }
 
             return state.mesh == null
@@ -489,17 +432,17 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             var sourceRoot = layer == null ? null : layer.SourceModelOrPrefab;
             if (!FBXUVModelPrefabReferenceUtility.TryResolveRoot(sourceRoot, out _, out var rootError))
             {
-                return $"Source Model / Prefab: {rootError} 既存のSource Region値は保持しています。";
+                return $"転送元 Model / Prefab: {rootError} 既存のSource Region値は保持しています。";
             }
 
             if (optionCount == 0)
             {
-                return "Source Model / Prefab配下にMeshがありません。既存のSource Region値は保持しています。";
+                return "転送元 Model / Prefab配下にMeshがありません。既存のSource Region値は保持しています。";
             }
 
             return state.mesh == null
                 ? "現在のSource RegionにMeshがありません。候補から明示的に選択してください。"
-                : "Source RegionのMeshは現在のSource Model / Prefab配下にありません。既存値は保持しています。置き換える場合だけ候補から明示的に選択してください。";
+                : "Source RegionのMeshは現在の転送元 Model / Prefab配下にありません。既存値は保持しています。置き換える場合だけ候補から明示的に選択してください。";
         }
 
         private static void ApplyMeshSelection(ViewState state, Mesh mesh, int subMeshIndex)
@@ -602,7 +545,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             var island = FBXUVIslandExtractor.HitTest(state.islands, uv);
             if (island == null)
             {
-                ShowNotification(new GUIContent("この位置にUV islandはありません。"));
+                ShowNotification(new GUIContent("この位置にUV島はありません。"));
                 current.Use();
                 return;
             }
@@ -629,10 +572,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             ViewState state,
             FBXUVIsland island)
         {
+            if (side == Side.Target &&
+                !FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out _, out _, out _)) return;
+
             var region = binding.FindPropertyRelative(side == Side.Source ? "sourceRegion" : "targetRegion");
             if (region == null) return;
 
-            Undo.RecordObject(serializedLayer.targetObject, "UV islandを選択");
+            Undo.RecordObject(serializedLayer.targetObject, "UV島を選択");
             region.FindPropertyRelative("mesh").objectReferenceValue = state.mesh;
             region.FindPropertyRelative("subMeshIndex").intValue = state.subMeshIndex;
             region.FindPropertyRelative("uvChannel").intValue = state.uvChannel;
@@ -682,51 +628,24 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             state.selectedIslandId = -1;
             if (state.mesh == null) return;
 
-            var entry = GetMeshAnalysisEntry(state.mesh, state.subMeshIndex, state.uvChannel);
-            ResolveIslands(entry);
-            state.islands = entry.Islands;
-            state.extractionError = entry.IslandError;
-        }
-
-        private MeshAnalysisEntry GetMeshAnalysisEntry(Mesh mesh, int subMeshIndex, int uvChannel)
-        {
-            var key = new MeshAnalysisKey(mesh, subMeshIndex, uvChannel);
-            if (!meshAnalysisCache.TryGetValue(key, out var entry))
-            {
-                entry = new MeshAnalysisEntry
-                {
-                    Analysis = meshAnalysisSource.Get(mesh, subMeshIndex, uvChannel),
-                };
-                meshAnalysisCache.Add(key, entry);
-            }
-
-            return entry;
-        }
-
-        private static void ResolveIslands(MeshAnalysisEntry entry)
-        {
-            if (entry.IslandsResolved) return;
-
             using (MeshAnalysisMarker.Auto())
             {
-                entry.IslandsResolved = true;
                 try
                 {
-                    entry.Islands = FBXUVIslandExtractor.Extract(entry.Analysis.GetTriangles());
+                    state.islands = meshAnalysisCache.Get(state.mesh, state.subMeshIndex, state.uvChannel).GetIslands();
                 }
                 catch (Exception exception)
                 {
-                    entry.IslandError = exception.Message;
+                    state.extractionError = exception.Message;
                 }
             }
         }
 
         private string GetMeshHash(Mesh mesh, int subMeshIndex, int uvChannel)
         {
-            var entry = GetMeshAnalysisEntry(mesh, subMeshIndex, uvChannel);
             using (MeshAnalysisMarker.Auto())
             {
-                return entry.Analysis.GetContentHash();
+                return meshAnalysisCache.Get(mesh, subMeshIndex, uvChannel).GetContentHash();
             }
         }
 
@@ -764,8 +683,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             var currentSerializedLayer = GetSerializedLayer();
             currentSerializedLayer.UpdateIfRequiredOrScript();
 
-            var canvas = FindParentCanvas(layer.transform);
-            targetView.backgroundTexture = canvas?.TargetTexture?.SelectTexture;
+            targetView.backgroundTexture = ResolveTargetTexture();
 
             ReconcileActiveRegion(currentSerializedLayer, true);
             regionReconcileRequest = RegionReconcileRequest.None;
@@ -810,8 +728,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private void InvalidateAllCaches()
         {
-            meshAnalysisCache.Clear();
-            meshAnalysisSource = new FBXUVMeshAnalysisCache();
+            meshAnalysisCache = new FBXUVMeshAnalysisCache();
             InvalidateCandidateCaches();
             Invalidate(sourceView);
             Invalidate(targetView);
@@ -819,18 +736,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private void InvalidateCandidateCaches()
         {
-            sourceCandidateCacheValid = false;
-            sourceCandidateRoot = null;
-            sourceCandidateCache = null;
-            sourceCandidateLabels = null;
-            sourceReplacementLabels = null;
-            targetCandidateCacheValid = false;
-            targetCandidateRoot = null;
-            targetCandidateTexture = null;
-            targetCandidateCache = null;
-            targetOptionCache = null;
-            targetOptionLabels = null;
-            targetReplacementLabels = null;
+            candidateCache.Invalidate();
             regionNameLabelsValid = false;
             regionNameLabels = null;
         }
@@ -967,7 +873,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (!IsMeshHashCurrent(region, mesh, state.subMeshIndex, state.uvChannel))
             {
                 state.selectedIslandId = -1;
-                state.extractionError = "Mesh内容hashが一致しません。このregionのUV islandを再選択してください。";
+                state.extractionError = "Mesh内容hashが一致しません。このregionのUV島を再選択してください。";
                 return;
             }
 
@@ -1028,84 +934,24 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             return regionNameLabels;
         }
 
-        private List<(string Label, Mesh Mesh)> CollectSourceMeshes()
+        private List<FBXUVMeshOption> CollectSourceMeshes()
         {
-            var reference = layer == null ? null : layer.SourceModelOrPrefab;
-            FBXUVModelPrefabReferenceUtility.TryResolveRoot(reference, out var root, out _);
-            if (sourceCandidateCacheValid && ReferenceEquals(sourceCandidateRoot, root))
-            {
-                return sourceCandidateCache;
-            }
-
-            sourceCandidateRoot = root;
-            sourceCandidateCacheValid = true;
-            sourceCandidateCache = root != null
-                ? FBXUVModelPrefabReferenceUtility.CollectMeshes(root)
-                : new List<(string Label, Mesh Mesh)>();
-            sourceCandidateLabels = new string[sourceCandidateCache.Count];
-            sourceReplacementLabels = new string[sourceCandidateCache.Count + 1];
-            sourceReplacementLabels[0] = "<選択してください>";
-            for (var index = 0; index < sourceCandidateCache.Count; index++)
-            {
-                var label = sourceCandidateCache[index].Label;
-                sourceCandidateLabels[index] = label;
-                sourceReplacementLabels[index + 1] = label;
-            }
-
-            return sourceCandidateCache;
+            return candidateCache.GetSource(layer == null ? null : layer.SourceModelOrPrefab, out _).Options;
         }
 
         private List<FBXUVTargetMeshCandidate> CollectTargetMeshCandidates(Texture targetTexture)
         {
-            var root = layer == null ? null : layer.TargetModelOrPrefab;
-            EnsureTargetCandidateCache(root, targetTexture);
-            return targetCandidateCache;
+            return GetTargetCandidates(targetTexture).TargetCandidates;
         }
 
-        private List<TargetMeshOption> CollectTargetMeshOptions(Texture targetTexture)
+        private List<FBXUVMeshOption> CollectTargetMeshOptions(Texture targetTexture)
         {
-            var root = layer == null ? null : layer.TargetModelOrPrefab;
-            EnsureTargetCandidateCache(root, targetTexture);
-            return targetOptionCache;
+            return GetTargetCandidates(targetTexture).Options;
         }
 
-        private void EnsureTargetCandidateCache(GameObject root, Texture targetTexture)
+        private FBXUVMeshCandidateCache.Snapshot GetTargetCandidates(Texture targetTexture)
         {
-            FBXUVModelPrefabReferenceUtility.TryResolveRoot(root, out root, out _);
-            if (targetCandidateCacheValid &&
-                ReferenceEquals(targetCandidateRoot, root) &&
-                ReferenceEquals(targetCandidateTexture, targetTexture))
-            {
-                return;
-            }
-
-            targetCandidateRoot = root;
-            targetCandidateTexture = targetTexture;
-            targetCandidateCacheValid = true;
-            targetCandidateCache = root != null
-                ? FBXUVTargetMeshCollector.Collect(root, targetTexture)
-                : new List<FBXUVTargetMeshCandidate>();
-            targetOptionCache = new List<TargetMeshOption>();
-            foreach (var candidate in targetCandidateCache)
-            {
-                foreach (var subMeshIndex in candidate.SubMeshIndices)
-                {
-                    targetOptionCache.Add(new TargetMeshOption(
-                        $"{candidate.Label} / Submesh {subMeshIndex}",
-                        candidate.Mesh,
-                        subMeshIndex));
-                }
-            }
-
-            targetOptionLabels = new string[targetOptionCache.Count];
-            targetReplacementLabels = new string[targetOptionCache.Count + 1];
-            targetReplacementLabels[0] = "<選択してください>";
-            for (var index = 0; index < targetOptionCache.Count; index++)
-            {
-                var label = targetOptionCache[index].Label;
-                targetOptionLabels[index] = label;
-                targetReplacementLabels[index + 1] = label;
-            }
+            return candidateCache.GetTarget(layer, layer == null ? null : layer.TargetModelOrPrefab, targetTexture, out _);
         }
 
         private bool IsMeshSelectionAvailable(Side side, ViewState state)
@@ -1138,18 +984,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 Mathf.LerpUnclamped(rect.x, rect.xMax, uv.x),
                 Mathf.LerpUnclamped(rect.yMax, rect.y, uv.y),
                 0f);
-        }
-
-        private static MultiLayerImageCanvas FindParentCanvas(Transform transform)
-        {
-            var current = transform.parent;
-            while (current != null)
-            {
-                var canvas = current.GetComponent<MultiLayerImageCanvas>();
-                if (canvas != null) return canvas;
-                current = current.parent;
-            }
-            return null;
         }
 
         private static T ObjectReference<T>(SerializedObject serializedObject, string propertyName)

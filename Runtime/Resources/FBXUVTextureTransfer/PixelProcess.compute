@@ -38,11 +38,9 @@ void PropagateSeeds(uint3 dispatchId : SV_DispatchThreadID)
 {
     int2 coordinate = int2(dispatchId.xy);
     if (!IsInside(coordinate)) return;
-    if (_Mask[coordinate].r <= 0.5)
-    {
-        _SeedWrite[coordinate] = float4(-1.0, -1.0, 0.0, 0.0);
-        return;
-    }
+
+    // Let seeds cross the scratch rectangle so concave target masks cannot block a jump.
+    // InitializeSeeds restricts seed origins; ResolveFill restricts the final output.
 
     float4 bestSeed = _SeedRead[coordinate];
     float bestDistance = bestSeed.z > 0.5

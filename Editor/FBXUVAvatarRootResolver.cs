@@ -41,6 +41,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             out GameObject avatarRoot,
             out string error)
         {
+            return TryResolve((Component)layer, out avatarRoot, out error);
+        }
+
+        internal static bool TryResolve(
+            Component layer,
+            out GameObject avatarRoot,
+            out string error)
+        {
             avatarRoot = null;
             if (layer == null)
             {

@@ -8,7 +8,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
     internal static class FBXUVModelPrefabReferenceUtility
     {
         internal static bool TryResolveTargetRoot(
-            FBXUVTextureTransferLayer layer,
+            Component layer,
             out GameObject targetRoot,
             out string error)
         {
@@ -43,6 +43,23 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             out bool changed,
             out string error)
         {
+            return TryPopulateTargetRoot(layer, layer == null ? null : layer.TargetModelOrPrefab, out changed, out error);
+        }
+
+        internal static bool TryPopulateTargetRoot(
+            FBXUVMakeupTransferLayer layer,
+            out bool changed,
+            out string error)
+        {
+            return TryPopulateTargetRoot(layer, layer == null ? null : layer.targetModelOrPrefab, out changed, out error);
+        }
+
+        private static bool TryPopulateTargetRoot(
+            Component layer,
+            GameObject currentTarget,
+            out bool changed,
+            out string error)
+        {
             changed = false;
             if (layer == null)
             {
@@ -50,9 +67,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 return false;
             }
 
-            if (layer.TargetModelOrPrefab != null)
+            if (currentTarget != null)
             {
-                if (TryResolveRoot(layer.TargetModelOrPrefab, out _, out error))
+                if (TryResolveRoot(currentTarget, out _, out error))
                 {
                     error = string.Empty;
                     return true;
@@ -67,7 +84,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         }
 
         private static bool AssignTargetRoot(
-            FBXUVTextureTransferLayer layer,
+            Component layer,
             GameObject targetRoot,
             out bool changed)
         {
@@ -146,6 +163,16 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (!TryValidateRoot(assetRoot, out error)) return false;
 
             root = assetRoot;
+            return true;
+        }
+
+        internal static bool TryResolveRootForBuild(
+            GameObject reference, GameObject buildAvatarRoot, out GameObject root, out string error)
+        {
+            if (TryResolveRoot(reference, out root, out error)) return true;
+            if (reference == null || buildAvatarRoot == null || reference != buildAvatarRoot) return false;
+            root = buildAvatarRoot;
+            error = null;
             return true;
         }
 

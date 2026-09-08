@@ -39,17 +39,35 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             bool validateEnvironment,
             FBXUVMeshAnalysisCache analysisCache)
         {
+            return ValidateLayer(layer, validateEnvironment, analysisCache, null);
+        }
+
+        internal static IReadOnlyList<FBXUVTransferValidationIssue> ValidateLayerForBuild(
+            FBXUVTextureTransferLayer layer,
+            GameObject buildAvatarRoot)
+        {
+            if (buildAvatarRoot == null) throw new ArgumentNullException(nameof(buildAvatarRoot));
+            return ValidateLayer(layer, false, new FBXUVMeshAnalysisCache(), buildAvatarRoot);
+        }
+
+        private static IReadOnlyList<FBXUVTransferValidationIssue> ValidateLayer(
+            FBXUVTextureTransferLayer layer,
+            bool validateEnvironment,
+            FBXUVMeshAnalysisCache analysisCache,
+            GameObject buildAvatarRoot)
+        {
             if (analysisCache == null) throw new ArgumentNullException(nameof(analysisCache));
             using (ValidationMarker.Auto())
             {
-                return ValidateLayerCore(layer, validateEnvironment, analysisCache);
+                return ValidateLayerCore(layer, validateEnvironment, analysisCache, buildAvatarRoot);
             }
         }
 
         private static IReadOnlyList<FBXUVTransferValidationIssue> ValidateLayerCore(
             FBXUVTextureTransferLayer layer,
             bool validateEnvironment,
-            FBXUVMeshAnalysisCache analysisCache)
+            FBXUVMeshAnalysisCache analysisCache,
+            GameObject buildAvatarRoot)
         {
             var issues = new List<FBXUVTransferValidationIssue>();
             if (layer == null)
@@ -87,12 +105,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             var isSourceRootValid = TryResolveModelOrPrefabRoot(
                 sourceModelOrPrefabReference,
                 "Source",
+                buildAvatarRoot,
                 layer,
                 issues,
                 out var sourceModelOrPrefab);
             var isTargetRootValid = TryResolveModelOrPrefabRoot(
                 targetModelOrPrefabReference,
                 "Target",
+                buildAvatarRoot,
                 layer,
                 issues,
                 out var targetModelOrPrefab);
@@ -214,6 +234,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
         private static bool TryResolveModelOrPrefabRoot(
             GameObject reference,
             string label,
+            GameObject buildAvatarRoot,
             Object contextObject,
             ICollection<FBXUVTransferValidationIssue> issues,
             out GameObject root)
@@ -225,7 +246,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                 return false;
             }
 
-            if (FBXUVModelPrefabReferenceUtility.TryResolveRoot(reference, out root, out var error)) return true;
+            if (FBXUVModelPrefabReferenceUtility.TryResolveRootForBuild(
+                reference, buildAvatarRoot, out root, out var error)) return true;
 
             Add(issues, $"{label} Model/Prefab が無効です: {error}", reference);
             return false;
@@ -295,32 +317,12 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             FBXUVTextureTransferLayer layer,
             ICollection<FBXUVTransferValidationIssue> issues)
         {
-            var current = layer.transform.parent;
-            if (current == null)
+            if (!FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out var canvas, out var error, out var context))
             {
-                Add(issues, "Layerを MultiLayerImageCanvas または LayerFolder の子に配置してください。", layer);
+                Add(issues, error, context);
                 return null;
             }
-
-            while (current != null)
-            {
-                var canvas = current.GetComponent<MultiLayerImageCanvas>();
-                if (canvas != null)
-                {
-                    return canvas;
-                }
-
-                if (current.GetComponent<LayerFolder>() == null)
-                {
-                    Add(issues, "Layerから MultiLayerImageCanvas までの全ての中間親には LayerFolder が必要です。", current.gameObject);
-                    return null;
-                }
-
-                current = current.parent;
-            }
-
-            Add(issues, "親階層に MultiLayerImageCanvas がありません。", layer);
-            return null;
+            return canvas;
         }
 
         private static void ValidateRegion(
