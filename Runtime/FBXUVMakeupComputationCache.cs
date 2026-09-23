@@ -47,10 +47,10 @@ namespace GokouKotori.FBXUVTextureTransfer
             return true;
         }
 
-        private static FBXUVTriangle[] CopyTriangles(List<FBXUVTriangle> triangles) =>
+        internal static FBXUVTriangle[] CopyTriangles(List<FBXUVTriangle> triangles) =>
             triangles?.ConvertAll(t => t == null ? null : new FBXUVTriangle(t.index, t.a, t.b, t.c)).ToArray();
 
-        private static bool SameTriangles(FBXUVTriangle[] saved, List<FBXUVTriangle> current)
+        internal static bool SameTriangles(FBXUVTriangle[] saved, List<FBXUVTriangle> current)
         {
             if (saved == null || current == null) return saved == null && current == null;
             if (saved.Length != current.Count) return false;

@@ -23,6 +23,9 @@ namespace GokouKotori.FBXUVTextureTransfer
         public bool UsesExactMapping => true;
 
         [NonSerialized] private FBXUVMakeupComputationCache computationCache;
+        [NonSerialized] private FBXUVLiveMeshAnalysis sourceAnalysis, targetAnalysis;
+        [NonSerialized] private HashSet<int> validatedTriangleIndices;
+        [NonSerialized] private FBXUVMakeupTransferRenderer.RenderResources renderResources;
         internal FBXUVMakeupComputationCache ComputationCache =>
             computationCache ?? (computationCache = new FBXUVMakeupComputationCache());
         internal FBXUVMakeupMapping GetMapping() => ComputationCache.GetMapping(this);
@@ -43,10 +46,11 @@ namespace GokouKotori.FBXUVTextureTransfer
             if (makeupTexture == null) return Fail("メイクの透過PNGが未設定です。", out reason);
             var shader = ResolveTransferShader();
             if (shader == null || !shader.isSupported) return Fail("メイク転送Shaderを利用できません。", out reason);
-            var cache = new FBXUVMeshAnalysisCache();
             try
             {
-                if (!IsRegionReady(sourceRegion, cache) || !IsRegionReady(targetRegion, cache))
+                if (sourceAnalysis == null) sourceAnalysis = new FBXUVLiveMeshAnalysis();
+                if (targetAnalysis == null) targetAnalysis = new FBXUVLiveMeshAnalysis();
+                if (!IsRegionReady(sourceRegion, sourceAnalysis) || !IsRegionReady(targetRegion, targetAnalysis))
                     return Fail("顔Regionの選択・UV・Mesh hashが無効です。顔領域を再選択してください。", out reason);
             }
             catch (Exception)
@@ -90,15 +94,18 @@ namespace GokouKotori.FBXUVTextureTransfer
             }
         }
 
-        private static bool IsRegionReady(FBXUVTransferRegion region, FBXUVMeshAnalysisCache cache)
+        private bool IsRegionReady(FBXUVTransferRegion region, FBXUVLiveMeshAnalysis cache)
         {
             if (region == null || !region.bounds.IsValid || region.triangles == null || region.triangles.Count == 0
                 || !FBXUVMakeupWarp.IsUnitUv(new Vector2(region.bounds.minU, region.bounds.minV))
                 || !FBXUVMakeupWarp.IsUnitUv(new Vector2(region.bounds.maxU, region.bounds.maxV))
-                || !FBXUVMeshUtility.IsMeshHashCurrent(region, cache)) return false;
+                || region.mesh == null || string.IsNullOrEmpty(region.meshHash)) return false;
+            var analysis = cache.Get(region);
+            if (!string.Equals(region.meshHash, analysis.GetContentHash(), StringComparison.Ordinal)) return false;
             var hasArea = false;
-            var meshTriangles = cache.Get(region.mesh, region.subMeshIndex, region.uvChannel).GetTriangles();
-            var seen = new HashSet<int>();
+            var meshTriangles = analysis.GetTriangles();
+            var seen = validatedTriangleIndices ?? (validatedTriangleIndices = new HashSet<int>());
+            seen.Clear();
             foreach (var triangle in region.triangles)
             {
                 if (triangle == null || triangle.index < 0 || triangle.index >= meshTriangles.Count || !seen.Add(triangle.index)) return false;
@@ -114,6 +121,24 @@ namespace GokouKotori.FBXUVTextureTransfer
         }
 
         private static bool Fail(string message, out string reason) { reason = message; return false; }
+        internal FBXUVMakeupTransferRenderer.RenderResources GetRenderResources(FBXUVMakeupMapping mapping, Shader shader)
+        {
+            if (renderResources == null || !renderResources.Matches(this, mapping, shader))
+            {
+                ReleaseRenderResources();
+                renderResources = new FBXUVMakeupTransferRenderer.RenderResources(this, mapping, shader);
+            }
+            return renderResources;
+        }
+
+        internal void ReleaseRenderResources()
+        {
+            renderResources?.Dispose();
+            renderResources = null;
+        }
+
+        private void OnDisable() { ReleaseRenderResources(); }
+        private void OnDestroy() { ReleaseRenderResources(); }
         private void Reset() { EnsureExternalToolAsLayer(); }
         private void OnValidate()
         {

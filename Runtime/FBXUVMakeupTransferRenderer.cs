@@ -15,7 +15,7 @@ namespace GokouKotori.FBXUVTextureTransfer
         }
 
         internal static void Render(FBXUVMakeupTransferLayer layer, RenderTexture destination,
-            FBXUVMakeupMapping mapping)
+            FBXUVMakeupMapping mapping, bool reuseResources = true)
         {
             if (layer == null) throw new ArgumentNullException(nameof(layer));
             if (destination == null) throw new ArgumentNullException(nameof(destination));
@@ -25,27 +25,18 @@ namespace GokouKotori.FBXUVTextureTransfer
                 throw new ArgumentException("メイクTextureと転送元・転送先Regionが必要です。");
             var shader = layer.ResolveTransferShader();
             if (shader == null || !shader.isSupported) throw new InvalidOperationException("メイク転送Shaderを利用できません。");
-            Material material = null;
-            Mesh mesh = null;
-            SourceTriangleMask sourceMask = null;
-            IDisposable exactBuffers = null;
-            IDisposable mouthBuffers = null;
+            RenderResources resources = null;
+            var retainResources = reuseResources && layer.IsEnabledInHierarchy;
             var previous = RenderTexture.active;
             var previousSrgb = GL.sRGBWrite;
             try
             {
-                material = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
-                if (mapping.Exact != null)
-                {
-                    exactBuffers = mapping.Exact.Bind(material);
-                    if (mapping.Mouth != null) mouthBuffers = mapping.Mouth.Bind(material, true);
-                }
-                else material.SetInt("_UseExactMapping", 0);
-                sourceMask = SourceTriangleMask.Create(layer.sourceRegion.triangles);
-                sourceMask.Bind(material);
+                resources = retainResources ? layer.GetRenderResources(mapping, shader)
+                    : new RenderResources(layer, mapping, shader, false);
+                var material = resources.Material;
                 material.SetTexture("_MainTex", layer.makeupTexture);
                 material.SetInt("_PointCount", warp.Count);
-                material.SetVectorArray("_Points", warp.GetGpuPoints());
+                material.SetVectorArray("_Points", resources.GpuPoints);
                 material.SetVector("_Affine0", warp.GetGpuAffine(0));
                 material.SetVector("_AffineU", warp.GetGpuAffine(1));
                 material.SetVector("_AffineV", warp.GetGpuAffine(2));
@@ -53,23 +44,93 @@ namespace GokouKotori.FBXUVTextureTransfer
                 var bounds = layer.sourceRegion.bounds;
                 material.SetVector("_SourceBounds", new Vector4(bounds.minU, bounds.minV, bounds.maxU, bounds.maxV));
                 material.SetFloat("_RestoreSRGB", GraphicsFormatUtility.IsSRGBFormat(layer.makeupTexture.graphicsFormat) ? 1f : 0f);
-                mesh = CreateTargetMesh(layer.targetRegion.triangles);
                 Graphics.SetRenderTarget(destination);
                 // TTT expects raw straight RGBA values, regardless of the project's working color space.
                 GL.sRGBWrite = false;
                 GL.Clear(false, true, Color.clear);
                 if (!material.SetPass(0)) throw new InvalidOperationException("メイク転送Shader passを利用できません。");
-                Graphics.DrawMeshNow(mesh, Matrix4x4.identity);
+                Graphics.DrawMeshNow(resources.Mesh, Matrix4x4.identity);
             }
             finally
             {
                 GL.sRGBWrite = previousSrgb;
                 Graphics.SetRenderTarget(previous);
-                sourceMask?.Dispose();
-                exactBuffers?.Dispose();
-                mouthBuffers?.Dispose();
-                if (mesh != null) UnityEngine.Object.DestroyImmediate(mesh);
-                if (material != null) UnityEngine.Object.DestroyImmediate(material);
+                if (!retainResources) resources?.Dispose();
+            }
+        }
+
+        private static readonly List<RenderResources> liveResources = new List<RenderResources>();
+
+        internal static void ReleaseUnusedResources()
+        {
+            for (var i = liveResources.Count - 1; i >= 0; i--)
+            {
+                var resources = liveResources[i];
+                if (resources.Owner == null || !resources.Owner.IsEnabledInHierarchy) resources.Dispose();
+            }
+        }
+
+        internal static void ReleaseAllResources()
+        {
+            for (var i = liveResources.Count - 1; i >= 0; i--) liveResources[i].Dispose();
+        }
+
+        internal sealed class RenderResources : IDisposable
+        {
+            internal readonly FBXUVMakeupTransferLayer Owner;
+            internal Material Material { get; private set; }
+            internal Mesh Mesh { get; private set; }
+            internal Vector4[] GpuPoints { get; private set; }
+            private FBXUVMakeupMapping mapping;
+            private FBXUVTriangle[] sourceTriangles, targetTriangles;
+            private SourceTriangleMask sourceMask;
+            private IDisposable exactBuffers, mouthBuffers;
+
+            internal RenderResources(FBXUVMakeupTransferLayer layer, FBXUVMakeupMapping mapping,
+                Shader shader, bool retain = true)
+            {
+                Owner = layer;
+                this.mapping = mapping;
+                try
+                {
+                    Material = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+                    if (mapping.Exact != null)
+                    {
+                        exactBuffers = mapping.Exact.Bind(Material);
+                        if (mapping.Mouth != null) mouthBuffers = mapping.Mouth.Bind(Material, true);
+                    }
+                    else Material.SetInt("_UseExactMapping", 0);
+                    sourceMask = SourceTriangleMask.Create(layer.sourceRegion.triangles);
+                    sourceMask.Bind(Material);
+                    Mesh = CreateTargetMesh(layer.targetRegion.triangles);
+                    GpuPoints = mapping.Warp.GetGpuPoints();
+                    if (retain)
+                    {
+                        sourceTriangles = FBXUVMakeupComputationCache.CopyTriangles(layer.sourceRegion.triangles);
+                        targetTriangles = FBXUVMakeupComputationCache.CopyTriangles(layer.targetRegion.triangles);
+                        liveResources.Add(this);
+                    }
+                }
+                catch { Dispose(); throw; }
+            }
+
+            internal bool Matches(FBXUVMakeupTransferLayer layer, FBXUVMakeupMapping current, Shader shader)
+            {
+                return Material != null && Mesh != null && Material.shader == shader && ReferenceEquals(mapping, current)
+                    && FBXUVMakeupComputationCache.SameTriangles(sourceTriangles, layer.sourceRegion.triangles)
+                    && FBXUVMakeupComputationCache.SameTriangles(targetTriangles, layer.targetRegion.triangles);
+            }
+
+            public void Dispose()
+            {
+                liveResources.Remove(this);
+                sourceMask?.Dispose(); sourceMask = null;
+                exactBuffers?.Dispose(); exactBuffers = null;
+                mouthBuffers?.Dispose(); mouthBuffers = null;
+                if (Mesh != null) UnityEngine.Object.DestroyImmediate(Mesh);
+                if (Material != null) UnityEngine.Object.DestroyImmediate(Material);
+                Mesh = null; Material = null; GpuPoints = null;
+                mapping = null; sourceTriangles = targetTriangles = null;
             }
         }
 

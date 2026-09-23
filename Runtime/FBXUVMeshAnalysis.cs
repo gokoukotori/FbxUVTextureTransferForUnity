@@ -9,6 +9,34 @@ using UnityEngine;
 
 namespace GokouKotori.FBXUVTextureTransfer
 {
+    // One live snapshot per selected mesh. Compare content on every validation,
+    // including script edits that do not produce an editor change notification.
+    internal sealed class FBXUVLiveMeshAnalysis
+    {
+        private Mesh mesh;
+        private int subMeshIndex, uvChannel;
+        private FBXUVMeshAnalysis analysis;
+        private readonly List<Vector2> uvScratch = new List<Vector2>();
+        private readonly List<int> indexScratch = new List<int>();
+
+        internal FBXUVMeshAnalysis Get(FBXUVTransferRegion region)
+        {
+            try
+            {
+                if (analysis == null || mesh != region.mesh || subMeshIndex != region.subMeshIndex
+                    || uvChannel != region.uvChannel || !analysis.MatchesCurrent(region.mesh, uvScratch, indexScratch))
+                {
+                    mesh = region.mesh;
+                    subMeshIndex = region.subMeshIndex;
+                    uvChannel = region.uvChannel;
+                    analysis = new FBXUVMeshAnalysis(mesh, subMeshIndex, uvChannel);
+                }
+                return analysis;
+            }
+            catch { analysis = null; throw; }
+        }
+    }
+
     internal sealed class FBXUVMeshAnalysisCache
     {
         private static readonly ProfilerMarker AnalysisMarker =
@@ -120,6 +148,28 @@ namespace GokouKotori.FBXUVTextureTransfer
             {
                 failure = exception;
             }
+        }
+
+        internal bool MatchesCurrent(Mesh mesh, List<Vector2> currentUvs, List<int> currentIndices)
+        {
+            if (failure != null) return false;
+            FBXUVMeshUtility.ValidateArguments(mesh, subMeshIndex, uvChannel);
+            if (mesh.vertexCount != vertexCount || mesh.GetTopology(subMeshIndex) != MeshTopology.Triangles)
+                return false;
+            mesh.GetUVs(uvChannel, currentUvs);
+            if (currentUvs.Count != uvs.Count) return false;
+            for (var i = 0; i < uvs.Count; i++)
+            {
+                // Hashes include raw float bytes, including signed zero.
+                if (BitConverter.SingleToInt32Bits(currentUvs[i].x) != BitConverter.SingleToInt32Bits(uvs[i].x)
+                    || BitConverter.SingleToInt32Bits(currentUvs[i].y) != BitConverter.SingleToInt32Bits(uvs[i].y))
+                    return false;
+            }
+            mesh.GetIndices(currentIndices, subMeshIndex, true);
+            if (currentIndices.Count != indices.Length) return false;
+            for (var i = 0; i < indices.Length; i++)
+                if (currentIndices[i] != indices[i]) return false;
+            return true;
         }
 
         internal List<FBXUVTriangle> GetTriangles()
