@@ -134,6 +134,9 @@ namespace GokouKotori.FBXUVTextureTransfer
     public sealed class FBXUVRegionBinding : ISerializationCallbackReceiver
     {
         private const int RemovedOrientationValue = 1;
+        [NonSerialized] private FBXUVRegionComputationCache computationCache;
+        internal FBXUVRegionComputationCache ComputationCache =>
+            computationCache ?? (computationCache = new FBXUVRegionComputationCache());
 
         public string name = string.Empty;
         public bool enabled = true;

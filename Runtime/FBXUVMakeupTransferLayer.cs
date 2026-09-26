@@ -6,7 +6,7 @@ using UnityEngine;
 
 namespace GokouKotori.FBXUVTextureTransfer
 {
-    [AddComponentMenu("FBX UV Texture Transfer/FBX UV Makeup Transfer Layer (β版)")]
+    [AddComponentMenu("Gokoukotori/FBX UV Texture Transfer/FBX UV Makeup Transfer Layer (β版)")]
     [DisallowMultipleComponent]
     public sealed class FBXUVMakeupTransferLayer : MonoBehaviour, IExternalToolCanBehaveAsImageLayerV1, INDMFEditorOnly
     {

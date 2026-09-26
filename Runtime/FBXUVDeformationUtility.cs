@@ -116,7 +116,8 @@ namespace GokouKotori.FBXUVTextureTransfer
             int targetWidth,
             int targetHeight,
             FBXUVTransferOrientation orientation,
-            bool limitRayToTargetTriangleBounds)
+            bool limitRayToTargetTriangleBounds,
+            bool useSpatialIndex = true)
         {
             var sourceTriangles = GetEffectiveTriangles(sourceRegion);
             var targetTriangles = GetEffectiveTriangles(targetRegion);
@@ -155,6 +156,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             }
 
             var boundaryDisplacements = new Dictionary<VertexKey, Vector2>(boundaryKeys.Count);
+            var spatialIndex = useSpatialIndex ? new TriangleSpatialIndex(targetTriangles, targetTriangleBounds) : null;
             foreach (var key in boundaryKeys)
             {
                 var initial = initialPositions[key];
@@ -165,7 +167,7 @@ namespace GokouKotori.FBXUVTextureTransfer
                     initial,
                     targetWidth,
                     targetHeight,
-                    limitRayToTargetTriangleBounds);
+                    limitRayToTargetTriangleBounds, spatialIndex);
                 boundaryDisplacements[key] = boundary - initial;
             }
 
@@ -256,7 +258,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             Vector2 initial,
             int targetWidth,
             int targetHeight,
-            bool limitRayToTargetTriangleBounds)
+            bool limitRayToTargetTriangleBounds, TriangleSpatialIndex spatialIndex)
         {
             var direction = initial - center;
             var length = direction.magnitude;
@@ -273,7 +275,8 @@ namespace GokouKotori.FBXUVTextureTransfer
             for (var distance = 0f; distance <= maxDistance; distance += RayStepPixels)
             {
                 var point = center + direction * distance;
-                if (ContainsPoint(targetTriangles, TopLeftPixelToUv(point, targetWidth, targetHeight))) lastInside = point;
+                var uv = TopLeftPixelToUv(point, targetWidth, targetHeight);
+                if (spatialIndex != null ? spatialIndex.Contains(uv) : ContainsPoint(targetTriangles, uv)) lastInside = point;
             }
 
             var initialDistance = Vector2.Distance(center, initial);
@@ -366,6 +369,83 @@ namespace GokouKotori.FBXUVTextureTransfer
                 if (FBXUVIslandExtractor.ContainsPoint(triangles[index], point)) return true;
             }
             return false;
+        }
+
+        internal static Dictionary<VertexKey, FBXUVDeformedVertex> CreateKeyedVertexMapWithoutSpatialIndexForTests(
+            FBXUVTransferRegion source, FBXUVTransferRegion target, int width, int height,
+            FBXUVTransferOrientation orientation)
+        {
+            return CreateKeyedVertexMapCore(source, target, width, height, orientation, true, false);
+        }
+
+        // Broad phase only: retain the original barycentric test and ray samples.
+        private sealed class TriangleSpatialIndex
+        {
+            private readonly IReadOnlyList<FBXUVTriangle> triangles;
+            private readonly FBXUVBounds bounds;
+            private readonly int size;
+            private readonly List<FBXUVTriangle>[] cells;
+
+            internal TriangleSpatialIndex(IReadOnlyList<FBXUVTriangle> triangles, FBXUVBounds bounds)
+            {
+                this.triangles = triangles;
+                this.bounds = bounds;
+                if (triangles.Count < 16 || !Finite(bounds.minU) || !Finite(bounds.maxU)
+                    || !Finite(bounds.minV) || !Finite(bounds.maxV)) return;
+                size = Mathf.Clamp(Mathf.CeilToInt(Mathf.Sqrt(triangles.Count / 4f)), 2, 32);
+                cells = new List<FBXUVTriangle>[size * size];
+                var references = 0;
+                foreach (var triangle in triangles)
+                {
+                    if (!Finite(triangle.a.x) || !Finite(triangle.a.y)
+                        || !Finite(triangle.b.x) || !Finite(triangle.b.y)
+                        || !Finite(triangle.c.x) || !Finite(triangle.c.y))
+                    {
+                        cells = null;
+                        return;
+                    }
+                    var minX = Math.Min(triangle.a.x, Math.Min(triangle.b.x, triangle.c.x));
+                    var maxX = Math.Max(triangle.a.x, Math.Max(triangle.b.x, triangle.c.x));
+                    var minY = Math.Min(triangle.a.y, Math.Min(triangle.b.y, triangle.c.y));
+                    var maxY = Math.Max(triangle.a.y, Math.Max(triangle.b.y, triangle.c.y));
+                    // Barycentric weights >= -1e-6 allow two negative weights.
+                    // Expand by twice the coordinate range, plus rounding slack.
+                    var padX = ((double)maxX - minX) * 2e-6 + Math.Max(1d, Math.Max(Math.Abs(minX), Math.Abs(maxX))) * 1e-7;
+                    var padY = ((double)maxY - minY) * 2e-6 + Math.Max(1d, Math.Max(Math.Abs(minY), Math.Abs(maxY))) * 1e-7;
+                    var left = Cell(minX - padX, bounds.minU, bounds.maxU);
+                    var right = Cell(maxX + padX, bounds.minU, bounds.maxU);
+                    var bottom = Cell(minY - padY, bounds.minV, bounds.maxV);
+                    var top = Cell(maxY + padY, bounds.minV, bounds.maxV);
+                    references += (right - left + 1) * (top - bottom + 1);
+                    if (references > 262144) { cells = null; return; }
+                    for (var y = bottom; y <= top; y++)
+                        for (var x = left; x <= right; x++)
+                        {
+                            var index = y * size + x;
+                            if (cells[index] == null) cells[index] = new List<FBXUVTriangle>();
+                            cells[index].Add(triangle);
+                        }
+                }
+            }
+
+            internal bool Contains(Vector2 point)
+            {
+                if (cells == null) return ContainsPoint(triangles, point);
+                if (!Finite(point.x) || !Finite(point.y)) return false;
+                var candidates = cells[Cell(point.y, bounds.minV, bounds.maxV) * size
+                    + Cell(point.x, bounds.minU, bounds.maxU)];
+                return candidates != null && ContainsPoint(candidates, point);
+            }
+
+            private int Cell(double value, double min, double max)
+            {
+                var normalized = (value - min) / (max - min);
+                if (normalized <= 0) return 0;
+                if (normalized >= 1) return size - 1;
+                return (int)(normalized * size);
+            }
+
+            private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
         private static List<FBXUVTriangle> DistinctTriangles(IReadOnlyList<FBXUVTriangle> triangles)

@@ -67,7 +67,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         internal int MeshAnalysisCacheCount => meshAnalysisCache.AnalysisCount;
         internal SerializedObject CachedSerializedLayer => serializedLayer;
 
-        [MenuItem("Tools/FBX UV Texture Transfer/UV Region Editor")]
+        [MenuItem("Tools/Gokoukotori/FBX UV Texture Transfer/UV Region Editor")]
         public static void Open()
         {
             GetWindow<FBXUVTextureTransferWindow>("FBX UV Texture Transfer");

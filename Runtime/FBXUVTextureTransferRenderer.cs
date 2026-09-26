@@ -54,7 +54,7 @@ namespace GokouKotori.FBXUVTextureTransfer
                     if (binding == null || !binding.enabled || string.IsNullOrWhiteSpace(binding.name)) continue;
                     if (binding.sourceRegion == null || binding.targetRegion == null) continue;
                     RenderRegionCore(layer.defaultSourceTexture, binding.sourceRegion, binding.targetRegion,
-                        binding.orientation, destination, resources);
+                        binding.orientation, destination, resources, binding.ComputationCache);
                 }
             }
         }
@@ -146,12 +146,14 @@ namespace GokouKotori.FBXUVTextureTransfer
             FBXUVTransferRegion targetRegion,
             FBXUVTransferOrientation orientation,
             RenderTexture destination,
-            FBXUVRenderResources resources)
+            FBXUVRenderResources resources,
+            FBXUVRegionComputationCache cache = null)
         {
             using (RenderRegionMarker.Auto())
             {
-                var targetTriangles = FBXUVDeformationUtility.GetEffectiveTriangles(targetRegion);
-                var sourceTriangles = FBXUVDeformationUtility.GetEffectiveTriangles(sourceRegion);
+                cache?.Prepare(sourceRegion, targetRegion);
+                var targetTriangles = cache?.TargetTriangles ?? FBXUVDeformationUtility.GetEffectiveTriangles(targetRegion);
+                var sourceTriangles = cache?.SourceTriangles ?? FBXUVDeformationUtility.GetEffectiveTriangles(sourceRegion);
                 if (targetTriangles.Count == 0 || sourceTriangles.Count == 0) return;
                 var targetBounds = targetRegion.bounds.IsValid ? targetRegion.bounds : FBXUVBounds.FromTriangles(targetTriangles);
                 if (!targetBounds.IsValid) return;
@@ -172,7 +174,9 @@ namespace GokouKotori.FBXUVTextureTransfer
                     seedB = GetSeedTemporary(pixelBounds.Width, pixelBounds.Height, "FBXUV Seed B");
                     Clear(region);
                     Clear(mask);
-                    var vertexMap = FBXUVDeformationUtility.CreateKeyedVertexMap(
+                    var vertexMap = cache != null
+                        ? cache.GetVertexMap(destination.width, destination.height, orientation)
+                        : FBXUVDeformationUtility.CreateKeyedVertexMap(
                         sourceRegion,
                         targetRegion,
                         destination.width,

@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.2.0-beta.3] - 2026-09-26
+
+### Changed
+
+- 通常転送の境界探索で空間分割によって候補三角形を絞り込み、Region Binding増加時のプレビュー生成負荷を軽減。
+- Regionごとの変形結果を直近2種類の出力サイズ・向きで再利用し、三角形・Boundsの変更やUndo時は内容比較で更新。
+- 通常転送・メイク転送コンポーネントの追加メニューを `Gokoukotori > FBX UV Texture Transfer` 配下へ、UV Region Editorを `Tools > Gokoukotori > FBX UV Texture Transfer` 配下へ移動。
+
 ## [0.2.0-beta.2] - 2026-09-23
 
 ### Changed
