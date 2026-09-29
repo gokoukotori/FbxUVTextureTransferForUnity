@@ -107,7 +107,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
         }
 
-        private static bool UsesTexture(
+        internal static bool UsesTexture(
             Material material,
             Texture targetTexture,
             IDictionary<Material, bool> materialMatches)

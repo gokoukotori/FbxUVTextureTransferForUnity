@@ -307,7 +307,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             }
         }
 
-        private static PixelBounds GetExpandedPixelBounds(FBXUVBounds bounds, int width, int height, int padding)
+        internal static PixelBounds GetExpandedPixelBounds(FBXUVBounds bounds, int width, int height, int padding)
         {
             var left = Mathf.Clamp(Mathf.FloorToInt(bounds.minU * width) - padding, 0, width - 1);
             var top = Mathf.Clamp(Mathf.FloorToInt((1f - bounds.maxV) * height) - padding, 0, height - 1);
@@ -316,7 +316,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             return new PixelBounds(left, top, right, bottom);
         }
 
-        private static RenderTexture GetColorTemporary(RenderTexture formatSource, int width, int height, string name)
+        internal static RenderTexture GetColorTemporary(RenderTexture formatSource, int width, int height, string name)
         {
             var descriptor = formatSource.descriptor;
             descriptor.width = width;
@@ -378,13 +378,13 @@ namespace GokouKotori.FBXUVTextureTransfer
             return texture;
         }
 
-        private static void ReleaseTemporary(RenderTexture texture)
+        internal static void ReleaseTemporary(RenderTexture texture)
         {
             if (texture == null) return;
             RenderTexture.ReleaseTemporary(texture);
         }
 
-        private struct PixelBounds
+        internal struct PixelBounds
         {
             public readonly int Left;
             public readonly int Top;

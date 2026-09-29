@@ -28,6 +28,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private sealed class Pane
         {
+            internal readonly FBXUVPreviewViewport viewport = new FBXUVPreviewViewport();
             internal Mesh mesh;
             internal int submesh;
             internal int uv;
@@ -290,30 +291,23 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 {
                     if (isSource) sourceImageRect = rect; else targetImageRect = rect;
                 }
-                EditorGUI.DrawRect(rect, new Color(.16f, .16f, .16f));
+                GUI.BeginGroup(rect);
+                var local = new Rect(Vector2.zero, rect.size);
+                if (pane.viewport.HandleInput(local)) Repaint();
+                var image = pane.viewport.ImageRect(local);
+                EditorGUI.DrawRect(local, new Color(.16f, .16f, .16f));
                 var background = isSource ? (layer.sourceReferenceTexture != null ? layer.sourceReferenceTexture : layer.makeupTexture) : ResolveTargetTexture();
-                if (background != null) EditorGUI.DrawPreviewTexture(rect, background, null, ScaleMode.StretchToFill);
+                if (background != null) EditorGUI.DrawPreviewTexture(image, background, null, ScaleMode.StretchToFill);
                 if (isSource && layer.sourceReferenceTexture != null && layer.makeupTexture != null)
-                    GUI.DrawTexture(rect, layer.makeupTexture, ScaleMode.StretchToFill, true);
+                    GUI.DrawTexture(image, layer.makeupTexture, ScaleMode.StretchToFill, true);
+                var selectedIsland = region != null && region.mesh == pane.mesh && region.subMeshIndex == pane.submesh
+                    && region.uvChannel == pane.uv ? region.islandId : -1;
                 if (Event.current.type == EventType.Repaint)
                 {
                     Handles.BeginGUI();
                     if (selected >= 0 && selectIsland)
                     {
-                        foreach (var island in pane.islands)
-                        {
-                            Handles.color = region != null && region.mesh == pane.mesh && region.subMeshIndex == pane.submesh
-                                && region.uvChannel == pane.uv && region.islandId == island.id ? new Color(1, .65f, .15f, .9f) : new Color(.1f, .85f, 1, .25f);
-                            var lines = new Vector3[island.triangles.Count * 6];
-                            for (var i = 0; i < island.triangles.Count; i++)
-                            {
-                                var tri = island.triangles[i];
-                                var a = ToGui(rect, tri.a); var b = ToGui(rect, tri.b); var c = ToGui(rect, tri.c);
-                                lines[i * 6] = a; lines[i * 6 + 1] = b; lines[i * 6 + 2] = b;
-                                lines[i * 6 + 3] = c; lines[i * 6 + 4] = c; lines[i * 6 + 5] = a;
-                            }
-                            Handles.DrawLines(lines);
-                        }
+                        FBXUVIslandPreview.Draw(image, pane.islands, selectedIsland);
                     }
                     if (!selectIsland && pane.boundaries != null && region != null && region.mesh == pane.mesh
                         && region.subMeshIndex == pane.submesh && region.uvChannel == pane.uv)
@@ -325,9 +319,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                                 : index == pane.boundarySelection.eyeLeftUv ? Color.cyan
                                 : index == pane.boundarySelection.eyeRightUv ? Color.yellow : new Color(1, .5f, .15f, .65f);
                             Handles.color = color;
-                            var lines = loop.Select(p => ToGui(rect, p)).Concat(new[] { ToGui(rect, loop[0]) }).ToArray();
+                            var lines = loop.Select(p => ToGui(image, p)).Concat(new[] { ToGui(image, loop[0]) }).ToArray();
                             Handles.DrawAAPolyLine(2, lines);
-                            var center = ToGui(rect, FBXUVMakeupLandmarkUtility.LoopBounds(loop).Center);
+                            var center = ToGui(image, FBXUVMakeupLandmarkUtility.LoopBounds(loop).Center);
                             GUI.Label(new Rect(center.x + 3, center.y + 3, 70, 20), "境界 " + (index + 1), EditorStyles.whiteMiniLabel);
                         }
                     }
@@ -337,7 +331,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                         {
                             var point = layer.landmarks[i];
                             if (point == null) continue;
-                            var xy = ToGui(rect, isSource ? point.sourceUv : point.targetUv);
+                            var xy = ToGui(image, isSource ? point.sourceUv : point.targetUv);
                             Handles.color = i == selectedPoint ? Color.yellow : Color.magenta;
                             Handles.DrawSolidDisc(xy, Vector3.forward, i == selectedPoint ? 5 : 3);
                             GUI.Label(new Rect(xy.x + 4, xy.y - 16, 45, 20), (i + 1).ToString(), EditorStyles.whiteMiniLabel);
@@ -345,7 +339,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                     }
                     Handles.EndGUI();
                 }
-                HandleInput(rect, pane, isSource, selected >= 0);
+                HandleInput(local, image, pane, isSource, selected >= 0);
+                GUI.EndGroup();
+                if (pane.viewport.DrawControls(pane.islands.Find(i => i.id == selectedIsland))) Repaint();
                 if (!selectIsland) DrawBoundarySelectors(pane);
             }
         }
@@ -446,13 +442,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (!string.IsNullOrEmpty(pane.boundaryError)) EditorGUILayout.HelpBox(pane.boundaryError, MessageType.Info);
         }
 
-        private void HandleInput(Rect rect, Pane pane, bool isSource, bool validMesh)
+        private void HandleInput(Rect rect, Rect image, Pane pane, bool isSource, bool validMesh)
         {
             var current = Event.current;
             var control = GUIUtility.GetControlID(isSource ? 891341 : 891342, FocusType.Passive, rect);
             if (current.type == EventType.MouseDown && current.button == 0 && rect.Contains(current.mousePosition))
             {
-                var uv = ToUv(rect, current.mousePosition);
+                var uv = FBXUVPreviewViewport.ToUv(image, current.mousePosition);
                 if (selectIsland)
                 {
                     if (validMesh)
@@ -476,21 +472,21 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 }
                 else
                 {
-                    var hit = FindPoint(rect, isSource, current.mousePosition);
+                    var hit = FindPoint(image, isSource, current.mousePosition);
                     if (hit >= 0) selectedPoint = hit;
                     if (HasSelectedPoint())
                     {
                         Undo.IncrementCurrentGroup();
                         dragUndoGroup = Undo.GetCurrentGroup();
                         GUIUtility.hotControl = dragControl = control;
-                        MovePoint(isSource, uv);
+                        MovePoint(isSource, ClampUv(uv));
                     }
                 }
                 current.Use(); Repaint();
             }
             else if (current.type == EventType.MouseDrag && GUIUtility.hotControl == control && dragControl == control)
             {
-                MovePoint(isSource, ToUv(rect, current.mousePosition));
+                MovePoint(isSource, ClampUv(FBXUVPreviewViewport.ToUv(image, current.mousePosition)));
                 current.Use(); Repaint();
             }
             else if (current.type == EventType.MouseUp && dragControl == control)
@@ -579,7 +575,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             return nearest;
         }
         private static Vector3 ToGui(Rect rect, Vector2 uv) => new Vector3(rect.x + uv.x * rect.width, rect.yMax - uv.y * rect.height, 0);
-        private static Vector2 ToUv(Rect rect, Vector2 point) => ClampUv(new Vector2((point.x - rect.x) / rect.width, (rect.yMax - point.y) / rect.height));
         private static Vector2 ClampUv(Vector2 uv) => new Vector2(Mathf.Clamp01(uv.x), Mathf.Clamp01(uv.y));
     }
 }

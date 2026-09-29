@@ -42,6 +42,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             [NonSerialized] public int cachedUvChannel = -1;
             [NonSerialized] public string extractionError;
             [NonSerialized] public bool hasPendingRegionSelection;
+            [NonSerialized] public FBXUVPreviewViewport viewport = new FBXUVPreviewViewport();
+            [NonSerialized] public Rect previewRect;
         }
 
         [SerializeField] private FBXUVTextureTransferLayer layer;
@@ -55,6 +57,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         [NonSerialized] private GameObject cachedTargetModelOrPrefab;
         [NonSerialized] private Texture2D cachedTargetTexture;
         [NonSerialized] private RegionReconcileRequest regionReconcileRequest;
+        [NonSerialized] private Vector2 windowScreenOrigin;
 
         private FBXUVMeshAnalysisCache meshAnalysisCache = new FBXUVMeshAnalysisCache();
         private readonly Vector3[] triangleLinePoints = new Vector3[4];
@@ -160,6 +163,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private void OnGUI()
         {
+            windowScreenOrigin = GUIUtility.GUIToScreenPoint(Vector2.zero);
             using (WindowGuiMarker.Auto())
             {
                 DrawLayerSelection();
@@ -269,8 +273,19 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 var backgroundTexture = side == Side.Source
                     ? ObjectReference<Texture2D>(serializedLayer, "defaultSourceTexture")
                     : state.backgroundTexture;
-                DrawUvPreview(previewRect, state, backgroundTexture);
-                HandleUvClick(previewRect, serializedLayer, side, state);
+                state.viewport ??= new FBXUVPreviewViewport();
+                if (Event.current.type == EventType.Repaint)
+                    state.previewRect = new Rect(GUIUtility.GUIToScreenPoint(previewRect.position)
+                        - windowScreenOrigin, previewRect.size);
+                GUI.BeginGroup(previewRect);
+                var local = new Rect(Vector2.zero, previewRect.size);
+                if (state.viewport.HandleInput(local)) Repaint();
+                var image = state.viewport.ImageRect(local);
+                EditorGUI.DrawRect(local, new Color(0.08f, 0.08f, 0.08f, 1f));
+                DrawUvPreview(image, state, backgroundTexture);
+                HandleUvClick(local, image, serializedLayer, side, state);
+                GUI.EndGroup();
+                if (state.viewport.DrawControls(state.islands?.Find(i => i.Id == state.selectedIslandId))) Repaint();
                 if (!string.IsNullOrEmpty(state.extractionError))
                 {
                     EditorGUILayout.HelpBox(state.extractionError, MessageType.Error);
@@ -510,7 +525,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             Handles.EndGUI();
         }
 
-        private void HandleUvClick(Rect rect, SerializedObject serializedLayer, Side side, ViewState state)
+        private void HandleUvClick(Rect rect, Rect image, SerializedObject serializedLayer, Side side, ViewState state)
         {
             var current = Event.current;
             if (current.type != EventType.MouseDown || current.button != 0 || !rect.Contains(current.mousePosition))
@@ -539,9 +554,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 return;
             }
 
-            var uv = new Vector2(
-                Mathf.InverseLerp(rect.x, rect.xMax, current.mousePosition.x),
-                1f - Mathf.InverseLerp(rect.y, rect.yMax, current.mousePosition.y));
+            var uv = FBXUVPreviewViewport.ToUv(image, current.mousePosition);
             var island = FBXUVIslandExtractor.HitTest(state.islands, uv);
             if (island == null)
             {
