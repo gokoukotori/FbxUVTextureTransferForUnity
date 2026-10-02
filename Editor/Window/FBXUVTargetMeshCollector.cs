@@ -21,6 +21,20 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         internal IReadOnlyList<int> SubMeshIndices { get; }
     }
 
+    internal sealed class FBXUVTargetRendererCandidate
+    {
+        internal FBXUVTargetRendererCandidate(Renderer renderer, Mesh mesh, IReadOnlyList<int> subMeshIndices)
+        {
+            Renderer = renderer;
+            Mesh = mesh;
+            SubMeshIndices = subMeshIndices;
+        }
+
+        internal Renderer Renderer { get; }
+        internal Mesh Mesh { get; }
+        internal IReadOnlyList<int> SubMeshIndices { get; }
+    }
+
     internal static class FBXUVTargetMeshCollector
     {
         internal static List<FBXUVTargetMeshCandidate> Collect(
@@ -30,37 +44,20 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             var result = new List<FBXUVTargetMeshCandidate>();
             if (root == null || targetTexture == null) return result;
 
-            var materialMatches = new Dictionary<Material, bool>();
             var candidateByMesh = new Dictionary<Mesh, MutableCandidate>();
             var candidates = new List<MutableCandidate>();
 
-            foreach (var renderer in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            foreach (var item in CollectRenderers(root, targetTexture))
             {
-                AddRenderer(
-                    root.transform,
-                    renderer,
-                    renderer.sharedMesh,
-                    "Skinned",
-                    targetTexture,
-                    materialMatches,
-                    candidateByMesh,
-                    candidates);
-            }
-
-            foreach (var renderer in root.GetComponentsInChildren<MeshRenderer>(true))
-            {
-                var filter = renderer.GetComponent<MeshFilter>();
-                if (filter == null) continue;
-
-                AddRenderer(
-                    root.transform,
-                    renderer,
-                    filter.sharedMesh,
-                    "MeshFilter",
-                    targetTexture,
-                    materialMatches,
-                    candidateByMesh,
-                    candidates);
+                if (!candidateByMesh.TryGetValue(item.Mesh, out var candidate))
+                {
+                    var rendererLabel = item.Renderer is SkinnedMeshRenderer ? "Skinned" : "MeshFilter";
+                    candidate = new MutableCandidate(
+                        $"{HierarchyPath(root.transform, item.Renderer.transform)} ({rendererLabel})", item.Mesh);
+                    candidateByMesh.Add(item.Mesh, candidate);
+                    candidates.Add(candidate);
+                }
+                candidate.SubMeshIndices.UnionWith(item.SubMeshIndices);
             }
 
             foreach (var candidate in candidates)
@@ -76,35 +73,28 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             return result;
         }
 
-        private static void AddRenderer(
-            Transform root,
-            Renderer renderer,
-            Mesh mesh,
-            string rendererLabel,
-            Texture targetTexture,
-            IDictionary<Material, bool> materialMatches,
-            IDictionary<Mesh, MutableCandidate> candidateByMesh,
-            ICollection<MutableCandidate> candidates)
+        internal static List<FBXUVTargetRendererCandidate> CollectRenderers(GameObject root, Texture targetTexture)
         {
-            if (renderer == null || mesh == null || mesh.subMeshCount <= 0) return;
+            var result = new List<FBXUVTargetRendererCandidate>();
+            if (root == null || targetTexture == null) return result;
 
-            MutableCandidate candidate = null;
-            var materials = renderer.sharedMaterials;
-            for (var materialIndex = 0; materialIndex < materials.Length; materialIndex++)
+            var materialMatches = new Dictionary<Material, bool>();
+            foreach (var item in FBXUVRendererMeshUtility.Collect(root))
             {
-                if (!UsesTexture(materials[materialIndex], targetTexture, materialMatches)) continue;
-
-                if (candidate == null && !candidateByMesh.TryGetValue(mesh, out candidate))
+                if (item.Mesh.subMeshCount <= 0) continue;
+                var subMeshIndices = new HashSet<int>();
+                var materials = item.Renderer.sharedMaterials;
+                for (var materialIndex = 0; materialIndex < materials.Length; materialIndex++)
                 {
-                    candidate = new MutableCandidate(
-                        $"{HierarchyPath(root, renderer.transform)} ({rendererLabel})",
-                        mesh);
-                    candidateByMesh.Add(mesh, candidate);
-                    candidates.Add(candidate);
+                    if (UsesTexture(materials[materialIndex], targetTexture, materialMatches))
+                        subMeshIndices.Add(Mathf.Min(materialIndex, item.Mesh.subMeshCount - 1));
                 }
-
-                candidate.SubMeshIndices.Add(Mathf.Min(materialIndex, mesh.subMeshCount - 1));
+                if (subMeshIndices.Count == 0) continue;
+                var sorted = new List<int>(subMeshIndices);
+                sorted.Sort();
+                result.Add(new FBXUVTargetRendererCandidate(item.Renderer, item.Mesh, new ReadOnlyCollection<int>(sorted)));
             }
+            return result;
         }
 
         internal static bool UsesTexture(

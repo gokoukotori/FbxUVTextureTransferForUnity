@@ -49,12 +49,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             try
             {
                 var renderer = FBXUVEyeGeometry.ResolveRenderer(root, selection);
-                var materials = renderer.sharedMaterials;
-                var mesh = selection.region.mesh;
-                var cache = new Dictionary<Material, bool>();
-                for (var i = 0; i < materials.Length; i++)
-                    if (Mathf.Min(i, mesh.subMeshCount - 1) == selection.region.subMeshIndex
-                        && FBXUVTargetMeshCollector.UsesTexture(materials[i], texture, cache)) return true;
+                return FBXUVTargetMeshCollector.CollectRenderers(root, texture)
+                    .Any(candidate => candidate.Renderer == renderer
+                        && candidate.SubMeshIndices.Contains(selection.region.subMeshIndex));
             }
             catch (System.ArgumentException) { }
             return false;

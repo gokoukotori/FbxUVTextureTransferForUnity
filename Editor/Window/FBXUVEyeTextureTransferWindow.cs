@@ -297,18 +297,34 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             var result = new List<Candidate>();
             if (root == null || (target && texture == null)) return result;
-            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            if (target)
             {
-                var mesh = FBXUVEyeGeometry.MeshOf(renderer); if (mesh == null) continue;
-                var path = FBXUVEyeGeometry.Path(root.transform, renderer.transform);
-                for (var sub = 0; sub < mesh.subMeshCount; sub++)
-                {
-                    if (target && !FBXUVEyeTransferValidation.MatchesSelectedRenderer(root, texture,
-                            new FBXUVEyeRegion { rendererPath = path, region = new FBXUVTransferRegion { mesh = mesh, subMeshIndex = sub } })) continue;
-                    result.Add(new Candidate { Mesh = mesh, Path = path, Submesh = sub, Label = (string.IsNullOrEmpty(path) ? root.name : path) + " / " + sub });
-                }
+                foreach (var candidate in FBXUVTargetMeshCollector.CollectRenderers(root, texture))
+                    Add(candidate.Renderer, candidate.Mesh, candidate.SubMeshIndices);
+            }
+            else
+            {
+                foreach (var candidate in FBXUVRendererMeshUtility.Collect(root))
+                    Add(candidate.Renderer, candidate.Mesh, Enumerable.Range(0, candidate.Mesh.subMeshCount));
             }
             return result;
+
+            void Add(Renderer renderer, Mesh mesh, IEnumerable<int> subMeshIndices)
+            {
+                var path = FBXUVEyeGeometry.Path(root.transform, renderer.transform);
+                if (target)
+                {
+                    // Retain the existing rejection of ambiguous saved renderer paths.
+                    try
+                    {
+                        FBXUVEyeGeometry.ResolveRenderer(root,
+                            new FBXUVEyeRegion { rendererPath = path, region = new FBXUVTransferRegion { mesh = mesh } });
+                    }
+                    catch (ArgumentException) { return; }
+                }
+                foreach (var sub in subMeshIndices)
+                    result.Add(new Candidate { Mesh = mesh, Path = path, Submesh = sub, Label = (string.IsNullOrEmpty(path) ? root.name : path) + " / " + sub });
+            }
         }
         private void Save(int index, Pane pane)
         {

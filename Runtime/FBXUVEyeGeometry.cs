@@ -53,16 +53,12 @@ namespace GokouKotori.FBXUVTextureTransfer
         {
             if (root == null || selection?.region?.mesh == null || selection.rendererPath == null)
                 throw new ArgumentException("Model / Prefab とUVアイランドを選択してください。");
-            var matches = root.GetComponentsInChildren<Renderer>(true).Where(r =>
-                Path(root.transform, r.transform) == selection.rendererPath && MeshOf(r) == selection.region.mesh).ToArray();
+            var matches = FBXUVRendererMeshUtility.Collect(root).Where(item =>
+                Path(root.transform, item.Renderer.transform) == selection.rendererPath && item.Mesh == selection.region.mesh)
+                .Select(item => item.Renderer).ToArray();
             if (matches.Length != 1)
                 throw new ArgumentException("選択したRendererを一意に取得できません。UVアイランドを選択し直してください。");
             return matches[0];
-        }
-
-        internal static Mesh MeshOf(Renderer renderer)
-        {
-            return renderer is SkinnedMeshRenderer skinned ? skinned.sharedMesh : renderer.GetComponent<MeshFilter>()?.sharedMesh;
         }
 
         internal static string Path(Transform root, Transform item)
