@@ -63,7 +63,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
 
             var sourceValid = ResolveRoot(layer.sourceModelOrPrefab, "Source", buildRoot, out var sourceRoot, out var sourceError);
             if (!sourceValid) Add(sourceError);
-            else if (!ContainsMesh(sourceRoot, layer.sourceRegion == null ? null : layer.sourceRegion.mesh))
+            else if (!FBXUVModelPrefabReferenceUtility.ContainsMesh(sourceRoot, layer.sourceRegion == null ? null : layer.sourceRegion.mesh))
                 Add("Source の顔Meshが指定した Model / Prefab 内にありません。顔UVを選択し直してください。");
             var targetValid = ResolveRoot(layer.targetModelOrPrefab, "Target", buildRoot, out var targetRoot, out var targetError);
             if (!targetValid) Add(targetError);
@@ -81,13 +81,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                 reference, buildRoot, out root, out error)) return true;
             error = label + " Model / Prefab にProject内のModelまたはPrefabのメインルートを指定してください。";
             return false;
-        }
-
-        private static bool ContainsMesh(GameObject root, Mesh mesh)
-        {
-            return root != null && mesh != null &&
-                   (root.GetComponentsInChildren<SkinnedMeshRenderer>(true).Any(r => r.sharedMesh == mesh) ||
-                    root.GetComponentsInChildren<MeshFilter>(true).Any(r => r.sharedMesh == mesh));
         }
 
         private static bool MatchesTarget(GameObject root, Texture texture, FBXUVTransferRegion region)

@@ -100,7 +100,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             }
         }
 
-        public static void FillAndBleedForTesting(
+        internal static void FillAndBleedForTesting(
             RenderTexture source,
             RenderTexture targetMask,
             RenderTexture destination,

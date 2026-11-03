@@ -137,17 +137,8 @@ namespace GokouKotori.FBXUVTextureTransfer
             return new Vector2((float)x, (float)y);
         }
 
-        public float GetMaximumControlError(IReadOnlyList<FBXUVMakeupLandmark> landmarks)
-        {
-            var maximum = 0f;
-            if (landmarks == null) return maximum;
-            foreach (var point in landmarks)
-                if (point != null) maximum = Mathf.Max(maximum, Vector2.Distance(Evaluate(point.targetUv), point.sourceUv));
-            return maximum;
-        }
-
         /// <summary>Analytic Jacobian determinant of the target-to-source map.</summary>
-        public double EvaluateDeterminant(Vector2 targetUv)
+        internal double EvaluateDeterminant(Vector2 targetUv)
         {
             var ux = coefficients[Count + 1, 0];
             var uy = coefficients[Count + 1, 1];
@@ -166,25 +157,6 @@ namespace GokouKotori.FBXUVTextureTransfer
                 vy += dy * factor * coefficients[i, 1];
             }
             return ux * vy - vx * uy;
-        }
-
-        public FBXUVMakeupWarpInspection InspectRegion(IReadOnlyList<FBXUVTriangle> triangles)
-        {
-            var result = new FBXUVMakeupWarpInspection();
-            if (triangles == null || triangles.Count == 0) return result;
-            // Deterministic, bounded probes of the selected face, including regions
-            // where the current PNG may be transparent. This is not a proof of injectivity.
-            var count = Math.Min(1024, triangles.Count);
-            for (var sample = 0; sample < count; sample++)
-            {
-                var triangle = triangles[(int)((long)sample * triangles.Count / count)];
-                if (triangle == null) continue;
-                result.Add(EvaluateDeterminant((triangle.a + triangle.b + triangle.c) / 3f));
-                result.Add(EvaluateDeterminant(triangle.a * .6f + triangle.b * .2f + triangle.c * .2f));
-                result.Add(EvaluateDeterminant(triangle.a * .2f + triangle.b * .6f + triangle.c * .2f));
-                result.Add(EvaluateDeterminant(triangle.a * .2f + triangle.b * .2f + triangle.c * .6f));
-            }
-            return result;
         }
 
         internal Vector4[] GetGpuPoints()
@@ -225,30 +197,5 @@ namespace GokouKotori.FBXUVTextureTransfer
         }
 
         private static bool Fail(string message, out string reason) { reason = message; return false; }
-    }
-
-    public sealed class FBXUVMakeupWarpInspection
-    {
-        public int SampleCount { get; private set; }
-        public int PositiveCount { get; private set; }
-        public int NegativeCount { get; private set; }
-        public int SingularCount { get; private set; }
-        public double MinimumDeterminant { get; private set; } = double.PositiveInfinity;
-        public double MaximumDeterminant { get; private set; } = double.NegativeInfinity;
-        public bool HasFold => PositiveCount > 0 && NegativeCount > 0;
-        public bool IsMirrored => PositiveCount == 0 && NegativeCount > 0;
-
-        internal void Add(double value)
-        {
-            SampleCount++;
-            if (double.IsNaN(value) || double.IsInfinity(value) || Math.Abs(value) <= 1e-8) SingularCount++;
-            else if (value > 0) PositiveCount++;
-            else NegativeCount++;
-            if (!double.IsNaN(value))
-            {
-                MinimumDeterminant = Math.Min(MinimumDeterminant, value);
-                MaximumDeterminant = Math.Max(MaximumDeterminant, value);
-            }
-        }
     }
 }

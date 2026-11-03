@@ -65,20 +65,6 @@ namespace GokouKotori.FBXUVTextureTransfer
             FBXUVTransferRegion sourceRegion,
             FBXUVTransferRegion targetRegion,
             int targetWidth,
-            int targetHeight)
-        {
-            return CreateKeyedVertexMap(
-                sourceRegion,
-                targetRegion,
-                targetWidth,
-                targetHeight,
-                FBXUVTransferOrientation.Preserve);
-        }
-
-        internal static Dictionary<VertexKey, FBXUVDeformedVertex> CreateKeyedVertexMap(
-            FBXUVTransferRegion sourceRegion,
-            FBXUVTransferRegion targetRegion,
-            int targetWidth,
             int targetHeight,
             FBXUVTransferOrientation orientation)
         {

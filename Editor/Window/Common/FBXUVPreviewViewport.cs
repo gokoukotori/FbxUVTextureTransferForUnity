@@ -17,6 +17,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         internal static Vector2 ToUv(Rect image, Vector2 point) => new Vector2(
             (point.x - image.x) / image.width, 1 - (point.y - image.y) / image.height);
 
+        internal static Vector3 ToGui(Rect image, Vector2 uv) => new Vector3(
+            image.x + uv.x * image.width, image.y + (1 - uv.y) * image.height, 0);
+
         internal bool HandleInput(Rect viewport)
         {
             var current = Event.current;
@@ -41,7 +44,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                     Zoom = 1;
                     changed = true;
                 }
-                if (GUILayout.Button("候補を拡大") && selectedIsland != null)
+                if (GUILayout.Button("選択中の島を拡大") && selectedIsland != null)
                 {
                     Center = selectedIsland.bounds.Center;
                     Zoom = Mathf.Clamp(.8f / Mathf.Max(selectedIsland.bounds.Width, selectedIsland.bounds.Height), 1, 64);

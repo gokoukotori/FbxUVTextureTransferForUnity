@@ -20,7 +20,6 @@ namespace GokouKotori.FBXUVTextureTransfer
         [Range(0f, .1f)] public float warpSmoothing;
 
         public bool IsEnabledInHierarchy => enabled && gameObject.activeInHierarchy;
-        public bool UsesExactMapping => true;
 
         [NonSerialized] private FBXUVMakeupComputationCache computationCache;
         [NonSerialized] private FBXUVLiveMeshAnalysis sourceAnalysis, targetAnalysis;
@@ -68,30 +67,19 @@ namespace GokouKotori.FBXUVTextureTransfer
             return FBXUVMakeupWarp.TryCreate(landmarks, warpSmoothing, out warp, out reason);
         }
 
-        public bool HasExclusiveExternalToolImplementation()
-        {
-            var count = 0;
-            foreach (var component in GetComponents<MonoBehaviour>())
-                if (component is IExternalToolCanBehaveAsLayer) count++;
-            return count == 1;
-        }
+        public bool HasExclusiveExternalToolImplementation() => FBXUVLayerUtility.HasExclusiveImplementation(this);
 
         public void LoadImage(RenderTexture writeDistentionTexture)
         {
-            if (writeDistentionTexture == null) return;
-            try
-            {
-                FBXUVTextureTransferRenderer.Clear(writeDistentionTexture);
-                string reason;
-                if (!IsEnabledInHierarchy || !CanRender(out reason, out var mapping)) return;
-                FBXUVMakeupTransferRenderer.Render(this, writeDistentionTexture, mapping);
-            }
-            catch (Exception exception)
-            {
-                try { FBXUVTextureTransferRenderer.Clear(writeDistentionTexture); }
-                catch (Exception clearException) { Debug.LogError("メイク転送の透明fallback生成に失敗しました。\n" + clearException, this); }
-                Debug.LogError("メイク転送に失敗しました。透明レイヤーを返します。\n" + exception, this);
-            }
+            FBXUVLayerUtility.LoadImage(writeDistentionTexture, this, RenderIfReady,
+                "メイク転送に失敗しました。透明レイヤーを返します。",
+                "メイク転送の透明fallback生成に失敗しました。");
+        }
+
+        private void RenderIfReady(RenderTexture destination)
+        {
+            if (!IsEnabledInHierarchy || !CanRender(out _, out var mapping)) return;
+            FBXUVMakeupTransferRenderer.Render(this, destination, mapping);
         }
 
         private bool IsRegionReady(FBXUVTransferRegion region, FBXUVLiveMeshAnalysis cache)
@@ -147,7 +135,7 @@ namespace GokouKotori.FBXUVTextureTransfer
         }
         private void EnsureExternalToolAsLayer()
         {
-            if (GetComponent<ExternalToolAsLayer>() == null) gameObject.AddComponent<ExternalToolAsLayer>();
+            FBXUVLayerUtility.EnsureExternalToolAsLayer(gameObject);
         }
     }
 }

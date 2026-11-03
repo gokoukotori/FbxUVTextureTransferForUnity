@@ -101,21 +101,42 @@ namespace GokouKotori.FBXUVTextureTransfer
             return result;
         }
 
+        internal FBXUVEyeGeometry[] Split()
+        {
+            WeldPositions(Positions, out var vertices, out var ids, out _);
+            var parents = Enumerable.Range(0, vertices.Count).ToArray();
+            int Find(int id)
+            {
+                while (parents[id] != id) { parents[id] = parents[parents[id]]; id = parents[id]; }
+                return id;
+            }
+            for (var i = 0; i < ids.Length; i += 3)
+            {
+                parents[Find(ids[i + 1])] = Find(ids[i]);
+                parents[Find(ids[i + 2])] = Find(ids[i]);
+            }
+            var groups = new Dictionary<int, List<int>>();
+            for (var i = 0; i < ids.Length; i += 3)
+            {
+                var id = Find(ids[i]);
+                if (!groups.TryGetValue(id, out var corners)) groups.Add(id, corners = new List<int>());
+                corners.Add(i); corners.Add(i + 1); corners.Add(i + 2);
+            }
+            if (groups.Count == 1) return new[] { this };
+            return groups.Values.OrderBy(corners => corners[0]).Select(corners => new FBXUVEyeGeometry
+            {
+                Positions = corners.Select(i => Positions[i]).ToArray(),
+                Uvs = corners.Select(i => Uvs[i]).ToArray(),
+                Triangles = Enumerable.Range(0, corners.Count).ToArray(),
+                Loops = Boundary(corners.Select(i => Positions[i]).ToArray())
+            }).ToArray();
+        }
+
         // Weld spatial seams, while keeping the original per-corner UVs for sampling.
         private static List<Vector3[]> Boundary(Vector3[] points)
         {
-            var vertices = new List<Vector3>();
-            var weld = new Dictionary<Vector3Int, int>();
-            var ids = new int[points.Length];
-            for (var i = 0; i < points.Length; i++)
-            {
-                var p = points[i];
-                var key = new Vector3Int(Mathf.RoundToInt(p.x * 1000000), Mathf.RoundToInt(p.y * 1000000), Mathf.RoundToInt(p.z * 1000000));
-                if (!weld.TryGetValue(key, out var id)) { id = vertices.Count; weld.Add(key, id); vertices.Add(p); }
-                ids[i] = id;
-            }
+            WeldPositions(points, out var vertices, out var ids, out _);
             var edges = new Dictionary<(int, int), int>();
-            var connected = new Dictionary<int, List<int>>();
             for (var i = 0; i < ids.Length; i += 3)
             {
                 for (var k = 0; k < 3; k++)
@@ -124,19 +145,8 @@ namespace GokouKotori.FBXUVTextureTransfer
                     if (a == b) throw new ArgumentException("選択領域に退化した三角形があります。");
                     var key = a < b ? (a, b) : (b, a);
                     edges.TryGetValue(key, out var count); edges[key] = count + 1;
-                    if (!connected.TryGetValue(a, out var neighbours)) connected[a] = neighbours = new List<int>();
-                    neighbours.Add(b); neighbours = connected.TryGetValue(b, out var back) ? back : (connected[b] = new List<int>());
-                    neighbours.Add(a);
                 }
             }
-            var reached = new HashSet<int>(); var stack = new Stack<int>(); stack.Push(0);
-            while (stack.Count > 0)
-            {
-                var v = stack.Pop(); if (!reached.Add(v)) continue;
-                foreach (var next in connected[v]) stack.Push(next);
-            }
-            if (reached.Count != vertices.Count)
-                throw new ArgumentException("同じUVに複数の立体領域が重なっています。片目ごとに分離したアイランドが必要です。");
             var boundary = new Dictionary<int, List<int>>();
             foreach (var edge in edges)
             {
@@ -162,6 +172,24 @@ namespace GokouKotori.FBXUVTextureTransfer
                 loops.Add(loop.ToArray());
             }
             return loops.OrderByDescending(loop => AreaVector(loop).sqrMagnitude).ToList();
+        }
+
+        internal static Vector3Int SpatialKey(Vector3 p) => new Vector3Int(
+            Mathf.RoundToInt(p.x * 1000000), Mathf.RoundToInt(p.y * 1000000), Mathf.RoundToInt(p.z * 1000000));
+
+        internal static void WeldPositions(Vector3[] points, out List<Vector3> vertices,
+            out int[] cornerIds, out Dictionary<Vector3Int, int> vertexIds)
+        {
+            vertices = new List<Vector3>();
+            vertexIds = new Dictionary<Vector3Int, int>();
+            cornerIds = new int[points.Length];
+            for (var i = 0; i < points.Length; i++)
+            {
+                var p = points[i]; var key = SpatialKey(p);
+                if (!vertexIds.TryGetValue(key, out var id))
+                { id = vertices.Count; vertexIds.Add(key, id); vertices.Add(p); }
+                cornerIds[i] = id;
+            }
         }
 
         private static Vector3 AreaVector(Vector3[] loop)
@@ -286,6 +314,10 @@ namespace GokouKotori.FBXUVTextureTransfer
         internal FBXUVEyeManualWarp ManualWarp;
         internal bool HasPupil => Pupil != null;
         internal bool HasTopologyPupilCenter;
+        internal FBXUVEyeMapping[] Parts;
+        internal int PartIndex;
+        internal int PartCount = 1;
+        internal IEnumerable<FBXUVEyeMapping> AllParts => Parts ?? Enumerable.Repeat(this, 1);
 
         internal static FBXUVEyeMapping Create(GameObject source, GameObject target, FBXUVEyeBinding binding, FBXUVMeshAnalysisCache cache)
         {
@@ -298,16 +330,79 @@ namespace GokouKotori.FBXUVTextureTransfer
                 || !FBXUVEyeGeometry.Finite(binding.pupilAspect) || binding.pupilAspect <= 0
                 || !FBXUVEyeGeometry.Finite(binding.pupilOffset.x) || !FBXUVEyeGeometry.Finite(binding.pupilOffset.y)))
                 throw new ArgumentException("瞳孔の倍率・縦横比には正の有限値、位置には有限値を指定してください。");
-            var map = new FBXUVEyeMapping
-            {
-                Iris = FBXUVEyeGeometry.Read(source, binding.iris, cache),
-                Pupil = separatePupil ? FBXUVEyeGeometry.Read(source, binding.pupil, cache) : null,
-                Target = FBXUVEyeGeometry.Read(target, binding.target, cache)
-            };
+            var irises = FBXUVEyeGeometry.Read(source, binding.iris, cache).Split();
+            var pupils = separatePupil ? FBXUVEyeGeometry.Read(source, binding.pupil, cache).Split() : null;
+            var targets = FBXUVEyeGeometry.Read(target, binding.target, cache).Split();
             if (separatePupil && binding.iris.rendererPath == binding.pupil.rendererPath && binding.iris.region.mesh == binding.pupil.region.mesh
                 && binding.iris.region.subMeshIndex == binding.pupil.region.subMeshIndex
                 && binding.iris.region.triangles.Select(t => t.index).Intersect(binding.pupil.region.triangles.Select(t => t.index)).Any())
                 throw new ArgumentException("虹彩と瞳孔には別の面を選択してください。同じアイランドは使用できません。");
+            var sourceCenters = NormalizedCenters(irises);
+            var targetCenters = NormalizedCenters(targets);
+            var maps = new FBXUVEyeMapping[targets.Length];
+            for (var i = 0; i < targets.Length; i++)
+            {
+                // Reuse the nearest source when only one side shares UVs or the counts differ.
+                var sourceIndex = Enumerable.Range(0, irises.Length)
+                    .OrderBy(j => (sourceCenters[j] - targetCenters[i]).sqrMagnitude)
+                    .ThenBy(j => (Center(irises[j]) - Center(targets[i])).sqrMagnitude).First();
+                var iris = irises[sourceIndex];
+                var pupil = separatePupil ? MatchPupil(iris, irises, pupils) : null;
+                maps[i] = CreatePart(iris, pupil, targets[i], binding, i, targets.Length);
+            }
+            if (maps.Length > 1) maps[0].Parts = maps;
+            return maps[0];
+        }
+
+        private static FBXUVEyeGeometry MatchPupil(FBXUVEyeGeometry iris,
+            FBXUVEyeGeometry[] irises, FBXUVEyeGeometry[] pupils)
+        {
+            var pupil = pupils.OrderBy(p => (Center(p) - Center(iris)).sqrMagnitude).First();
+            var anchor = irises.OrderBy(p => (Center(p) - Center(pupil)).sqrMagnitude).First();
+            if (anchor == iris) return pupil;
+            // A single selected pupil can also serve both eyes when only the iris shares UVs.
+            // Measure it against its own iris, then retain its aspect and relative area on the other side.
+            var from = FBXUVEyeFrame.Create(anchor); var to = FBXUVEyeFrame.Create(iris);
+            var origin = Center(pupil);
+            var center = from.MapTo(to, (Vector2)from.Project(origin));
+            var scale = Mathf.Sqrt(to.Area / from.Area);
+            var placed = to.Origin + to.Right * (center.x * to.Half.x + to.Center.x)
+                + to.Up * (center.y * to.Half.y + to.Center.y)
+                + to.Normal * Vector3.Dot(origin - from.Origin, from.Normal) * scale;
+            Vector3 Transform(Vector3 point)
+            {
+                var delta = point - origin;
+                return placed + (to.Right * Vector3.Dot(delta, from.Right)
+                    + to.Up * Vector3.Dot(delta, from.Up) + to.Normal * Vector3.Dot(delta, from.Normal)) * scale;
+            }
+            return new FBXUVEyeGeometry
+            {
+                Positions = pupil.Positions.Select(Transform).ToArray(), Uvs = pupil.Uvs, Triangles = pupil.Triangles,
+                Loops = pupil.Loops.Select(loop => loop.Select(Transform).ToArray()).ToList()
+            };
+        }
+
+        private static Vector3 Center(FBXUVEyeGeometry geometry)
+        {
+            var bounds = new Bounds(geometry.Positions[0], Vector3.zero);
+            foreach (var p in geometry.Positions) bounds.Encapsulate(p);
+            return bounds.center;
+        }
+
+        private static Vector3[] NormalizedCenters(FBXUVEyeGeometry[] geometries)
+        {
+            var centers = geometries.Select(Center).ToArray();
+            var min = centers.Aggregate(Vector3.Min); var max = centers.Aggregate(Vector3.Max);
+            var size = max - min; var center = (max + min) * .5f;
+            var half = Mathf.Max(size.x, Mathf.Max(size.y, size.z)) * .5f;
+            return centers.Select(p => half > 1e-6f ? (p - center) / half : Vector3.zero).ToArray();
+        }
+
+        private static FBXUVEyeMapping CreatePart(FBXUVEyeGeometry iris, FBXUVEyeGeometry pupil,
+            FBXUVEyeGeometry target, FBXUVEyeBinding binding, int partIndex, int partCount)
+        {
+            var separatePupil = binding.pupilMode == FBXUVEyePupilMode.Separate;
+            var map = new FBXUVEyeMapping { Iris = iris, Pupil = pupil, Target = target, PartIndex = partIndex, PartCount = partCount };
             if (map.Target.Loops.Count != 1 || (separatePupil && map.Pupil.Loops.Count != 1))
                 throw new ArgumentException("瞳孔と転送先には穴のないアイランドを指定してください。");
             map.SourceFrame = FBXUVEyeFrame.Create(map.Iris); map.TargetFrame = FBXUVEyeFrame.Create(map.Target);

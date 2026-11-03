@@ -13,6 +13,8 @@ namespace GokouKotori.FBXUVTextureTransfer
         public Vector2 position;
         public float radius = .5f;
         public bool fixedPoint;
+        // -1 preserves existing pins on every part; new pins follow the clicked target part.
+        public int targetComponent = -1;
     }
 
     [Serializable]
@@ -27,7 +29,7 @@ namespace GokouKotori.FBXUVTextureTransfer
         {
             enabled = enabled, regionKey = regionKey, irisMesh = irisMesh, targetMesh = targetMesh, pupilMesh = pupilMesh,
             pins = pins?.Select(p => p == null ? null : new FBXUVEyeManualPin
-            { origin = p.origin, position = p.position, radius = p.radius, fixedPoint = p.fixedPoint }).ToList()
+            { origin = p.origin, position = p.position, radius = p.radius, fixedPoint = p.fixedPoint, targetComponent = p.targetComponent }).ToList()
                 ?? new List<FBXUVEyeManualPin>()
         };
 
@@ -131,7 +133,9 @@ namespace GokouKotori.FBXUVTextureTransfer
                 || settings.targetMesh != binding.target?.region?.mesh
                 || (binding.pupilMode == FBXUVEyePupilMode.Separate && settings.pupilMesh != binding.pupil?.region?.mesh))
                 throw Error("領域・補正方式・瞳孔の構成が変更されています。手補正をリセットするか無効にしてください。");
-            return new FBXUVEyeManualWarp(map, settings.pins);
+            var pins = settings.pins.Where(p => p == null || p.targetComponent < 0
+                || Mathf.Min(p.targetComponent, map.PartCount - 1) == map.PartIndex).ToArray();
+            return pins.Length == 0 ? null : new FBXUVEyeManualWarp(map, pins);
         }
 
         internal static string RegionKey(FBXUVEyeBinding binding)

@@ -52,5 +52,10 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             error = "親階層に MultiLayerImageCanvas がありません。";
             return false;
         }
+
+        internal static Texture2D ResolveTargetTexture(Component layer)
+        {
+            return TryFindCanvas(layer, out var canvas, out _, out _) ? canvas.TargetTexture?.SelectTexture : null;
+        }
     }
 }

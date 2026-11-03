@@ -7,339 +7,388 @@ using UnityEngine;
 
 namespace GokouKotori.FBXUVTextureTransfer.Editor
 {
-    public sealed class FBXUVEyeTextureTransferWindow : EditorWindow
+    // Eye transfer: eye list, per-eye configuration, three region picker panes (iris / pupil / target) and manual correction.
+    public sealed class FBXUVEyeTextureTransferWindow : FBXUVLayerWindow<FBXUVEyeTextureTransferLayer>
     {
-        [SerializeField] private FBXUVEyeTextureTransferLayer layer;
-        [SerializeField] private int selectedEye;
+        private const string WindowTitle = "アイテクスチャ転送";
+        private const int IrisPane = 0;
+        private const int PupilPane = 1;
+        private const int TargetPane = 2;
+
+        [SerializeField] internal int selectedEye;
         [SerializeField] private int editingTab;
-        private readonly FBXUVEyeManualEditor manualEditor = new FBXUVEyeManualEditor();
-        private readonly Pane[] panes = { new Pane(), new Pane(), new Pane() };
-        private Vector2 scroll;
-        private string measurement, message;
-        private string configurationState;
-        private Vector2 windowScreenOrigin;
+        // Copied from the panes' PreviewScreenRect (relative to the window origin); default while a pane is hidden.
         [NonSerialized] internal readonly Rect[] imageRects = new Rect[3];
-        [NonSerialized] internal Rect transferMethodRect, pupilModeRect;
-        private sealed class Candidate
+        [NonSerialized] internal Rect transferMethodRect;
+        [NonSerialized] internal Rect pupilModeRect;
+        [NonSerialized] internal string measurement;
+        [NonSerialized] internal string message;
+        // Layer dirty count when the results were produced; edits of any setting (including the Inspector) bump it.
+        [NonSerialized] private int resultsDirtyCount;
+        [NonSerialized] private FBXUVRegionPickerPane[] panes;
+        [NonSerialized] private int syncedEyeCount = -1;
+        private readonly FBXUVEyeManualEditor manualEditor = new FBXUVEyeManualEditor();
+        private readonly FBXUVEntryListControl eyeList = new FBXUVEntryListControl("目", "虹彩・瞳孔・転送先のUV島の選択と手補正も削除されます。");
+
+        // Created lazily: the base analysis cache is not initialized yet while derived fields are.
+        internal FBXUVRegionPickerPane[] Panes => panes ??= new[]
         {
-            internal string Label, Path;
-            internal Mesh Mesh;
-            internal int Submesh;
-        }
-        private sealed class Pane
+            new FBXUVRegionPickerPane("転送元：虹彩", AnalysisCache),
+            new FBXUVRegionPickerPane("転送元：瞳孔", AnalysisCache),
+            new FBXUVRegionPickerPane("転送先：目", AnalysisCache)
+        };
+
+        protected override GameObject SourceModelOrPrefab => Layer == null ? null : Layer.sourceModelOrPrefab;
+        protected override GameObject TargetModelOrPrefab => Layer == null ? null : Layer.targetModelOrPrefab;
+        protected override string MissingLayerMessage => "設定するEye Transfer Layerを指定してください。";
+
+        [MenuItem("Tools/Gokoukotori/FBX UV Texture Transfer/Eye Transfer Editor")]
+        public static void Open()
         {
-            internal Candidate Candidate;
-            internal int Uv, Island = -1;
-            internal List<FBXUVIsland> Islands = new List<FBXUVIsland>();
-            internal List<Candidate> Candidates;
-            internal bool Initialized;
-            internal string Error;
-            internal float Zoom = 1;
-            internal Vector2 Center = Vector2.one * .5f;
-            internal GameObject Root;
-            internal Texture TargetTexture;
+            GetWindow<FBXUVEyeTextureTransferWindow>(WindowTitle);
         }
 
         public static void Open(FBXUVEyeTextureTransferLayer layer)
         {
-            var window = GetWindow<FBXUVEyeTextureTransferWindow>("アイテクスチャ転送");
-            window.layer = layer; window.Refresh(); window.Show(); window.Focus();
-        }
-        private void OnEnable()
-        {
-            minSize = new Vector2(960, 680);
-            Undo.undoRedoPerformed += Refresh; EditorApplication.projectChanged += Refresh;
-            EditorApplication.hierarchyChanged += InvalidateCandidates;
-        }
-        private void OnDisable()
-        {
-            manualEditor.Dispose();
-            Undo.undoRedoPerformed -= Refresh; EditorApplication.projectChanged -= Refresh;
-            EditorApplication.hierarchyChanged -= InvalidateCandidates;
-        }
-        private void OnLostFocus() => manualEditor.CancelDrag();
-        private void InvalidateCandidates()
-        {
-            foreach (var pane in panes) pane.Candidates = null;
-            Repaint();
-        }
-        private void Refresh()
-        {
-            manualEditor.Reset();
-            foreach (var pane in panes) { pane.Initialized = false; pane.Candidates = null; pane.Error = null; }
-            measurement = message = null; Repaint();
-        }
-        private void Changed()
-        {
-            EditorUtility.SetDirty(layer); PrefabUtility.RecordPrefabInstancePropertyModifications(layer);
-            configurationState = EditorJsonUtility.ToJson(layer);
-            measurement = message = null; Repaint();
+            var window = GetWindow<FBXUVEyeTextureTransferWindow>(WindowTitle);
+            window.SetLayer(layer);
+            window.Show();
+            window.Focus();
         }
 
-        private void OnGUI()
+        protected override void OnEnable()
         {
-            windowScreenOrigin = GUIUtility.GUIToScreenPoint(Vector2.zero);
-            var nextLayer = (FBXUVEyeTextureTransferLayer)EditorGUILayout.ObjectField("Eye Transfer Layer", layer, typeof(FBXUVEyeTextureTransferLayer), true);
-            if (nextLayer != layer) { layer = nextLayer; Refresh(); }
-            if (layer == null) { EditorGUILayout.HelpBox("設定するEye Transfer Layerを指定してください。", MessageType.Info); return; }
-            var currentState = EditorJsonUtility.ToJson(layer);
-            if (configurationState != currentState) { measurement = message = null; configurationState = currentState; }
-            scroll = EditorGUILayout.BeginScrollView(scroll);
-            using (var serialized = new SerializedObject(layer))
+            base.OnEnable();
+            minSize = new Vector2(960, 680);
+            RegisterPanes(Panes);
+        }
+
+        protected override void OnDisable()
+        {
+            base.OnDisable();
+            manualEditor.Dispose();
+        }
+
+        private void OnLostFocus() => manualEditor.CancelDrag();
+
+        protected override void OnLayerChanged()
+        {
+            manualEditor.Reset();
+            eyeList.ClearNameError();
+            measurement = null;
+            message = null;
+            syncedEyeCount = -1;
+        }
+
+        internal override void OnRefresh(FBXUVRefreshKind kind)
+        {
+            // Eye switches restore the saved values; other refreshes keep the hand-correction editor's previews and selection.
+            if (kind == FBXUVRefreshKind.RestoreSaved) manualEditor.Reset();
+            measurement = null;
+            message = null;
+            syncedEyeCount = EyeCount();
+            selectedEye = Mathf.Clamp(selectedEye, 0, Mathf.Max(0, syncedEyeCount - 1));
+            // The hidden pupil pane is synced too, so DetectSavedValueChanges stays quiet.
+            for (var index = 0; index < Panes.Length; index++) Panes[index].Sync(SavedRegion(index), kind);
+        }
+
+        // In-place edits (Inspector, scripts) change the saved regions without an Undo event: a struct comparison per pane.
+        // Eyes added or removed elsewhere may move the selected index to another eye, so those reload the saved values.
+        protected override bool DetectSavedValueChanges()
+        {
+            if (Layer == null) return false;
+            if (EyeCount() != syncedEyeCount)
             {
-                serialized.Update(); FBXUVEyeTextureTransferLayerEditor.DrawConfiguration(serialized);
-                if (serialized.ApplyModifiedProperties()) { InvalidateCandidates(); Changed(); }
+                RequestRefresh(FBXUVRefreshKind.RestoreSaved);
+                return true;
             }
+            for (var index = 0; index < Panes.Length; index++)
+                if (!SavedRegion(index).Equals(Panes[index].Saved)) return true;
+            return false;
+        }
+
+        protected override void DrawContent()
+        {
+            if ((measurement != null || message != null) && EditorUtility.GetDirtyCount(Layer) != resultsDirtyCount) ClearResults();
+            DrawEyeSelection();
+            if (EyeCount() == 0) return;
+            var eye = CurrentEye();
+            if (eye == null)
+            {
+                EditorGUILayout.HelpBox("無効な組み合わせです。削除して追加し直してください。", MessageType.Error);
+                return;
+            }
+            DrawEyeProperties(eye);
+            var separatePupil = eye.pupilMode == FBXUVEyePupilMode.Separate;
+            var nextTab = GUILayout.Toolbar(editingTab, new[] { "領域の選択", "手補正" });
+            if (nextTab != editingTab)
+            {
+                manualEditor.Reset();
+                editingTab = nextTab;
+                // The tabs draw different controls.
+                GUIUtility.ExitGUI();
+            }
+            if (editingTab == 0) DrawRegionSelection(eye, separatePupil);
+            else
+            {
+                Array.Clear(imageRects, 0, imageRects.Length);
+                manualEditor.Draw(Layer, eye, Mathf.Max(280, (position.width - 65) / 2), ClearResults, Repaint);
+            }
+            if (separatePupil) DrawPupilAdjustment();
             using (new EditorGUILayout.HorizontalScope())
             {
-                if (GUILayout.Button("目を追加", GUILayout.Width(100)))
+                if (GUILayout.Button("自動計測を確認")) Measure(eye);
+                if (separatePupil && GUILayout.Button("補正をリセット"))
                 {
-                    Undo.RecordObject(layer, "目の組み合わせを追加");
-                    layer.eyes ??= new List<FBXUVEyeBinding>();
-                    var number = layer.eyes.Count + 1; var name = "Eye " + number;
-                    while (layer.eyes.Any(e => e?.name == name)) name = "Eye " + (++number);
-                    layer.eyes.Add(new FBXUVEyeBinding { name = name }); selectedEye = layer.eyes.Count - 1;
-                    Changed(); Refresh();
+                    RecordChange("瞳孔の補正をリセット", () => {
+                        eye.pupilOffset = Vector2.zero;
+                        eye.pupilScale = eye.pupilAspect = 1;
+                    });
+                    message = null;
+                    Measure(eye);
                 }
-                if (layer.eyes != null && layer.eyes.Count > 0)
-                {
-                    selectedEye = Mathf.Clamp(selectedEye, 0, layer.eyes.Count - 1);
-                    var next = EditorGUILayout.Popup(selectedEye, layer.eyes.Select(e => e?.name ?? "未設定").ToArray());
-                    if (next != selectedEye) { selectedEye = next; Refresh(); }
-                    if (GUILayout.Button("この目を削除", GUILayout.Width(110)))
-                    {
-                        Undo.RecordObject(layer, "目の組み合わせを削除"); layer.eyes.RemoveAt(selectedEye);
-                        selectedEye = Mathf.Max(0, selectedEye - 1); Changed(); Refresh();
-                    }
-                }
+                if (GUILayout.Button("設定を検証")) Validate();
             }
-            if (layer.eyes == null || layer.eyes.Count == 0) { EditorGUILayout.EndScrollView(); return; }
-            var eye = layer.eyes[selectedEye];
-            if (eye == null) { EditorGUILayout.HelpBox("無効な組み合わせです。削除して追加し直してください。", MessageType.Error); EditorGUILayout.EndScrollView(); return; }
-            using (var serialized = new SerializedObject(layer))
+            if (measurement != null) EditorGUILayout.HelpBox(measurement, MessageType.Info);
+            if (message != null) EditorGUILayout.HelpBox(message, MessageType.Info);
+            EditorGUILayout.HelpBox("標準Meshから自動計算します。別パーツの瞳孔は縦横比と虹彩に対する投影面積比を保ちます。BlendShape・ポーズ・転送元Shaderの色やUV変形は計測に含めません。", MessageType.None);
+        }
+
+        internal void StoreIsland(int paneIndex, in FBXUVRegionPick pick)
+        {
+            var eye = CurrentEye();
+            if (eye == null) return;
+            var selection = new FBXUVEyeRegion { rendererPath = pick.RendererPath, region = FBXUVRegionFactory.Create(pick, AnalysisCache) };
+            RecordChange("目のUVアイランドを保存", () => {
+                if (paneIndex == IrisPane) eye.iris = selection;
+                else if (paneIndex == PupilPane) eye.pupil = selection;
+                else eye.target = selection;
+            });
+            Panes[paneIndex].MarkSaved(FBXUVSavedRegion.From(selection.region, selection.rendererPath));
+            ClearResults();
+            Measure(eye);
+        }
+
+        private void DrawEyeSelection()
+        {
+            var labels = Layer.eyes == null ? Array.Empty<string>() : Layer.eyes.Select(e => e?.name ?? "未設定").ToArray();
+            var next = selectedEye;
+            var command = eyeList.DrawSelector(labels, ref next);
+            if (command == FBXUVEntryCommand.Select) SelectEye(next);
+            else if (command == FBXUVEntryCommand.Add) SelectEye(AddEye());
+            else if (command == FBXUVEntryCommand.Remove)
+            {
+                RemoveEye(selectedEye);
+                SelectEye(selectedEye);
+            }
+            else if (command != FBXUVEntryCommand.None)
+            {
+                MoveEye(selectedEye, selectedEye + (command == FBXUVEntryCommand.MoveUp ? -1 : 1));
+                // The popup labels were laid out in the previous order.
+                GUIUtility.ExitGUI();
+            }
+        }
+
+        // Moves an eye in the list; the moved eye stays selected, so the panes keep their state.
+        internal bool MoveEye(int index, int newIndex)
+        {
+            if (index < 0 || index >= EyeCount() || newIndex < 0 || newIndex >= EyeCount() || index == newIndex) return false;
+            RecordChange("目の順番を変更", () => {
+                var eye = Layer.eyes[index];
+                Layer.eyes.RemoveAt(index);
+                Layer.eyes.Insert(newIndex, eye);
+            });
+            if (index == selectedEye) selectedEye = newIndex;
+            return true;
+        }
+
+        // Adds an eye with a unique name and selects it. Returns its index.
+        internal int AddEye()
+        {
+            RecordChange("目の組み合わせを追加", () => {
+                Layer.eyes ??= new List<FBXUVEyeBinding>();
+                var number = Layer.eyes.Count + 1;
+                var name = "Eye " + number;
+                while (Layer.eyes.Any(e => e?.name == name)) name = "Eye " + (++number);
+                Layer.eyes.Add(new FBXUVEyeBinding { name = name });
+            });
+            eyeList.ClearNameError();
+            selectedEye = Layer.eyes.Count - 1;
+            return selectedEye;
+        }
+
+        // Removes an eye without asking (the list control confirms first) and selects the one that takes its place.
+        internal bool RemoveEye(int index)
+        {
+            if (index < 0 || index >= EyeCount()) return false;
+            RecordChange("目の組み合わせを削除", () => Layer.eyes.RemoveAt(index));
+            eyeList.ClearNameError();
+            selectedEye = Mathf.Clamp(index, 0, Mathf.Max(0, EyeCount() - 1));
+            return true;
+        }
+
+        private bool ValidateEyeName(int index, string requestedName, out string normalized, out string error)
+        {
+            normalized = null;
+            if (index < 0 || index >= EyeCount())
+            {
+                error = "変更対象の目が見つかりません。";
+                return false;
+            }
+            var names = Layer.eyes.Select(e => e?.name).ToArray();
+            return FBXUVEntryListControl.ValidateName("目", names, index, requestedName, out normalized, out error);
+        }
+
+        // Eye switches reload the saved values; the rest of this GUI pass was laid out for the previous eye.
+        private void SelectEye(int index)
+        {
+            selectedEye = index;
+            RequestRefresh(FBXUVRefreshKind.RestoreSaved);
+            Repaint();
+            GUIUtility.ExitGUI();
+        }
+
+        private void DrawEyeProperties(FBXUVEyeBinding eye)
+        {
+            var pupilMode = eye.pupilMode;
+            using (var serialized = new SerializedObject(Layer))
             {
                 var property = serialized.FindProperty("eyes").GetArrayElementAtIndex(selectedEye);
-                using (new EditorGUILayout.HorizontalScope())
+                // The new name is written to this SerializedObject so it is applied together with the other fields.
+                eyeList.DrawEnabledAndName(property, selectedEye, (int index, string name, out string error) =>
                 {
-                    EditorGUILayout.PropertyField(property.FindPropertyRelative("enabled"), new GUIContent("有効"));
-                    EditorGUILayout.PropertyField(property.FindPropertyRelative("name"), new GUIContent("目の名前"));
-                }
+                    if (!ValidateEyeName(index, name, out var normalized, out error)) return false;
+                    property.FindPropertyRelative("name").stringValue = normalized;
+                    return true;
+                });
                 EditorGUILayout.PropertyField(property.FindPropertyRelative("transferMethod"), new GUIContent("補正方式"));
                 transferMethodRect = GUILayoutUtility.GetLastRect();
                 EditorGUILayout.PropertyField(property.FindPropertyRelative("pupilMode"), new GUIContent("瞳孔の構成"));
                 pupilModeRect = GUILayoutUtility.GetLastRect();
-                if (serialized.ApplyModifiedProperties()) Changed();
+                if (!serialized.ApplyModifiedProperties()) return;
             }
-            var separatePupil = eye.pupilMode == FBXUVEyePupilMode.Separate;
-            var nextTab = GUILayout.Toolbar(editingTab, new[] { "領域の選択", "手補正" });
-            if (nextTab != editingTab) { manualEditor.Reset(); editingTab = nextTab; }
-            if (editingTab == 0)
+            RequestRefresh(FBXUVRefreshKind.PreservePending);
+            Repaint();
+            // The pupil pane appears or disappears with the pupil mode.
+            if (eye.pupilMode != pupilMode) GUIUtility.ExitGUI();
+        }
+
+        private void DrawRegionSelection(FBXUVEyeBinding eye, bool separatePupil)
+        {
+            EditorGUILayout.HelpBox(separatePupil
+                ? "同じ側の目の「虹彩」「別パーツの瞳孔」「転送先」を選択します。画像のクリックまたは「UV島」の選択で保存します。スクロールで拡大、中ボタンで移動。"
+                : "「虹彩」と「転送先」を選択します。画像に描かれた瞳孔も含めて一体で転送します。瞳孔のない画像にも使用できます。瞳孔だけの位置・大きさ補正は行いません。", MessageType.Info);
+            if (eye.transferMethod == FBXUVEyeTransferMethod.Topology)
+                EditorGUILayout.HelpBox("面のつながりと形状から内部の対応を計算します。画像一体型では、両側の辺が一点に集まる頂点を検出できる場合、その点を瞳孔中心として合わせます。別パーツの瞳孔に対応する穴がある場合は、虹彩の内周も追従します。模様が変形するため、従来型と比較して選んでください。", MessageType.Info);
+            var size = PreviewSize(position.width, separatePupil ? 3 : 2);
+            using (new EditorGUILayout.HorizontalScope())
             {
-                EditorGUILayout.HelpBox(separatePupil
-                    ? "同じ側の目の「虹彩」「別パーツの瞳孔」「転送先」を選択します。画像クリックまたは「このアイランドを保存」で確定。スクロールで拡大、中ボタンで移動。"
-                    : "「虹彩」と「転送先」を選択します。画像に描かれた瞳孔も含めて一体で転送します。瞳孔のない画像にも使用できます。瞳孔だけの位置・大きさ補正は行いません。", MessageType.Info);
-                if (eye.transferMethod == FBXUVEyeTransferMethod.Topology)
-                    EditorGUILayout.HelpBox("面のつながりと形状から内部の対応を計算します。画像一体型では、両側の辺が一点に集まる頂点を検出できる場合、その点を瞳孔中心として合わせます。別パーツの瞳孔に対応する穴がある場合は、虹彩の内周も追従します。模様が変形するため、従来型と比較して選んでください。", MessageType.Info);
-                using (new EditorGUILayout.HorizontalScope())
+                DrawPane(IrisPane, size);
+                if (separatePupil)
                 {
-                    DrawPane(0, "転送元・虹彩", eye.iris);
-                    if (separatePupil) DrawPane(1, "転送元・瞳孔", eye.pupil);
-                    else imageRects[1] = default;
-                    DrawPane(2, "転送先・目", eye.target);
+                    GUILayout.Space(16f);
+                    DrawPane(PupilPane, size);
                 }
+                else imageRects[PupilPane] = default;
+                GUILayout.Space(16f);
+                DrawPane(TargetPane, size);
             }
-            else
-            {
-                Array.Clear(imageRects, 0, imageRects.Length);
-                manualEditor.Draw(layer, eye, Mathf.Max(280, (position.width - 65) / 2), Changed, Repaint);
-            }
-            if (separatePupil)
-            using (var serialized = new SerializedObject(layer))
+        }
+
+        private void DrawPane(int index, float size)
+        {
+            var pane = Panes[index];
+            var isTarget = index == TargetPane;
+            var targetTexture = ResolveTargetTexture();
+            var candidates = isTarget
+                ? CandidateCache.GetTarget(Layer, TargetModelOrPrefab, targetTexture, FBXUVCandidateGrouping.ByRenderer, out var error)
+                : CandidateCache.GetSource(SourceModelOrPrefab, FBXUVCandidateGrouping.ByRenderer, out error);
+            pane.Sync(SavedRegion(index), FBXUVRefreshKind.None);
+            pane.TrySelectOnlyCandidate(candidates);
+            var context = CreatePaneContext(
+                candidates,
+                error,
+                isTarget,
+                () => isTarget
+                    ? FBXUVCandidateMessages.Target(Layer, targetTexture, candidates.Options.Count, pane.Mesh != null)
+                    : FBXUVCandidateMessages.Source(SourceModelOrPrefab, candidates.Options.Count, pane.Mesh != null),
+                isTarget ? targetTexture : Layer.sourceTexture,
+                size);
+            var pick = pane.Draw(context);
+            imageRects[index] = pane.PreviewScreenRect;
+            if (!pick.HasValue) return;
+            StoreIsland(index, pick.Value);
+        }
+
+        private void DrawPupilAdjustment()
+        {
+            using (var serialized = new SerializedObject(Layer))
             {
                 var property = serialized.FindProperty("eyes").GetArrayElementAtIndex(selectedEye);
                 EditorGUILayout.LabelField("自動配置からの調整", EditorStyles.boldLabel);
                 EditorGUILayout.PropertyField(property.FindPropertyRelative("pupilOffset"), new GUIContent("瞳孔の位置補正", "転送先の目の幅・高さを1とします。+Xはアバターの左、+Yは上です。"));
                 EditorGUILayout.PropertyField(property.FindPropertyRelative("pupilScale"), new GUIContent("瞳孔の大きさ倍率", "1で自動計測値。縦横比を保って拡大・縮小します。"));
                 EditorGUILayout.PropertyField(property.FindPropertyRelative("pupilAspect"), new GUIContent("瞳孔の縦横比倍率", "1で転送元の縦横比。面積を保ちながら幅÷高さを補正します。"));
-                if (serialized.ApplyModifiedProperties()) Changed();
+                if (!serialized.ApplyModifiedProperties()) return;
             }
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button("自動計測を確認")) Measure(eye);
-                if (separatePupil && GUILayout.Button("補正をリセット"))
-                {
-                    Undo.RecordObject(layer, "瞳孔の補正をリセット"); eye.pupilOffset = Vector2.zero; eye.pupilScale = eye.pupilAspect = 1; Changed(); Measure(eye);
-                }
-                if (GUILayout.Button("設定を検証"))
-                {
-                    var issues = FBXUVEyeTransferValidation.ValidateLayer(layer);
-                    message = issues.Count == 0 ? "設定は有効です。TTTプレビューで転写結果を確認してください。" : string.Join("\n", issues.Select(i => i.Message));
-                }
-            }
-            if (measurement != null) EditorGUILayout.HelpBox(measurement, MessageType.Info);
-            if (message != null) EditorGUILayout.HelpBox(message, MessageType.Info);
-            EditorGUILayout.HelpBox("標準Meshから自動計算します。別パーツの瞳孔は縦横比と虹彩に対する投影面積比を保ちます。BlendShape・ポーズ・転送元Shaderの色やUV変形は計測に含めません。", MessageType.None);
-            EditorGUILayout.EndScrollView();
+            RequestRefresh(FBXUVRefreshKind.PreservePending);
+            Repaint();
         }
 
-        private void Measure(FBXUVEyeBinding eye)
+        internal void Validate()
+        {
+            var issues = FBXUVEyeTransferValidation.ValidateLayer(Layer);
+            message = issues.Count == 0 ? "設定は有効です。TTTプレビューで転写結果を確認してください。" : string.Join("\n", issues.Select(i => i.Message));
+            resultsDirtyCount = EditorUtility.GetDirtyCount(Layer);
+        }
+
+        internal void Measure(FBXUVEyeBinding eye)
         {
             try
             {
-                var mapping = FBXUVEyeMapping.Create(layer.sourceModelOrPrefab, layer.targetModelOrPrefab, eye, new FBXUVMeshAnalysisCache());
-                if (!mapping.HasPupil)
-                {
-                    var targetCenter = mapping.TargetPupilCenter * .5f + Vector2.one * .5f;
-                    measurement = mapping.HasTopologyPupilCenter
-                        ? $"辺の収束点を瞳孔中心として対応付けました（各目の外接矩形内で0〜1）。\n転送元: ({mapping.MeasuredCenter.x:F4}, {mapping.MeasuredCenter.y:F4}) → 転送先: ({targetCenter.x:F4}, {targetCenter.y:F4})"
-                        : eye.transferMethod == FBXUVEyeTransferMethod.Topology
-                            ? "両側で一意の収束点を検出できないため、外周と面の形状から対応付けています。瞳孔中心は固定していません。"
-                            : "画像一体型の設定は有効です。瞳孔の個別計測は行いません。";
-                    return;
-                }
-                measurement = $"転送元の瞳孔中心: ({mapping.MeasuredCenter.x:F4}, {mapping.MeasuredCenter.y:F4})\n"
-                    + $"虹彩に対する幅・高さ: {mapping.MeasuredSize.x:P2} / {mapping.MeasuredSize.y:P2}　縦横比（幅÷高さ）: {mapping.MeasuredAspect:F4}";
+                var mapping = FBXUVEyeMapping.Create(Layer.sourceModelOrPrefab, Layer.targetModelOrPrefab, eye, new FBXUVMeshAnalysisCache());
+                measurement = string.Join("\n", mapping.AllParts.Select((part, i) =>
+                    (mapping.Parts == null ? "" : $"領域 {i + 1}: ") + Measurement(part, eye)));
             }
-            catch (Exception e) { measurement = e.Message; }
+            catch (Exception e)
+            {
+                measurement = e.Message;
+            }
+            resultsDirtyCount = EditorUtility.GetDirtyCount(Layer);
         }
 
-        private void DrawPane(int index, string label, FBXUVEyeRegion saved)
+        private static string Measurement(FBXUVEyeMapping mapping, FBXUVEyeBinding eye)
         {
-            var pane = panes[index]; var isTarget = index == 2;
-            var reference = isTarget ? layer.targetModelOrPrefab : layer.sourceModelOrPrefab;
-            FBXUVModelPrefabReferenceUtility.TryResolveRoot(reference, out var root, out _);
-            Texture background = isTarget ? TargetTexture() : layer.sourceTexture;
-            if (pane.Root != root || pane.TargetTexture != (isTarget ? background : null))
-            { pane.Candidates = null; pane.Root = root; pane.TargetTexture = isTarget ? background : null; }
-            pane.Candidates ??= Collect(root, isTarget ? background : null, isTarget);
-            if (!pane.Initialized)
+            if (!mapping.HasPupil)
             {
-                pane.Candidate = pane.Candidates.Find(c => c.Mesh == saved?.region?.mesh && c.Path == saved.rendererPath && c.Submesh == saved.region.subMeshIndex);
-                if (pane.Candidate == null && saved?.region?.mesh == null && pane.Candidates.Count == 1) pane.Candidate = pane.Candidates[0];
-                pane.Uv = saved?.region?.uvChannel ?? 0; pane.Island = saved?.region?.islandId ?? -1;
-                pane.Initialized = true; Extract(pane);
+                var targetCenter = mapping.TargetPupilCenter * .5f + Vector2.one * .5f;
+                return mapping.HasTopologyPupilCenter
+                    ? $"辺の収束点を瞳孔中心として対応付けました（各目の外接矩形内で0〜1）。\n転送元: ({mapping.MeasuredCenter.x:F4}, {mapping.MeasuredCenter.y:F4}) → 転送先: ({targetCenter.x:F4}, {targetCenter.y:F4})"
+                    : eye.transferMethod == FBXUVEyeTransferMethod.Topology
+                        ? "両側で一意の収束点を検出できないため、外周と面の形状から対応付けています。瞳孔中心は固定していません。"
+                        : "画像一体型の設定は有効です。瞳孔の個別計測は行いません。";
             }
-            using (new EditorGUILayout.VerticalScope(GUILayout.Width(Mathf.Max(280, (position.width - 55) / 3))))
-            {
-                EditorGUILayout.LabelField(label, EditorStyles.boldLabel);
-                var selected = pane.Candidates.FindIndex(c => Same(c, pane.Candidate));
-                var labels = new[] { "候補を選択…" }.Concat(pane.Candidates.Select(c => c.Label)).ToArray();
-                var next = EditorGUILayout.Popup("Renderer / Submesh", selected + 1, labels) - 1;
-                if (next != selected)
-                { pane.Candidate = next < 0 ? null : pane.Candidates[next]; pane.Island = -1; Extract(pane); }
-                var uv = EditorGUILayout.IntSlider("UVチャンネル", pane.Uv, 0, 7);
-                if (uv != pane.Uv) { pane.Uv = uv; pane.Island = -1; Extract(pane); }
-                using (new EditorGUI.DisabledScope(selected < 0 || pane.Islands.Count == 0))
-                {
-                    var islandIndex = pane.Islands.FindIndex(i => i.id == pane.Island);
-                    var choices = new[] { "アイランドを選択…" }.Concat(pane.Islands.Select(i => $"{i.id} ({i.triangles.Count} triangles)")).ToArray();
-                    var nextIsland = EditorGUILayout.Popup("候補アイランド", islandIndex + 1, choices) - 1;
-                    if (nextIsland != islandIndex) pane.Island = nextIsland < 0 ? -1 : pane.Islands[nextIsland].id;
-                }
-                var size = Mathf.Max(260, (position.width - 65) / 3);
-                var rect = GUILayoutUtility.GetRect(size, size, GUILayout.ExpandWidth(false));
-                if (Event.current.type == EventType.Repaint)
-                    imageRects[index] = new Rect(GUIUtility.GUIToScreenPoint(rect.position) - windowScreenOrigin, rect.size);
-                GUI.BeginGroup(rect);
-                var local = new Rect(0, 0, size, size);
-                EditorGUI.DrawRect(local, new Color(.12f, .12f, .12f));
-                var image = new Rect(size * .5f - pane.Center.x * size * pane.Zoom,
-                    size * .5f - (1 - pane.Center.y) * size * pane.Zoom, size * pane.Zoom, size * pane.Zoom);
-                if (background != null) GUI.DrawTexture(image, background, ScaleMode.StretchToFill, true);
-                if (Event.current.type == EventType.Repaint && selected >= 0)
-                { Handles.BeginGUI(); FBXUVIslandPreview.Draw(image, pane.Islands, pane.Island); Handles.EndGUI(); }
-                var e = Event.current;
-                if (local.Contains(e.mousePosition))
-                {
-                    if (e.type == EventType.ScrollWheel)
-                    {
-                        pane.Zoom = Mathf.Clamp(pane.Zoom * Mathf.Exp(-e.delta.y * .12f), 1, 64); e.Use(); Repaint();
-                    }
-                    else if (e.type == EventType.MouseDrag && e.button == 2)
-                    { pane.Center += new Vector2(-e.delta.x, e.delta.y) / (size * pane.Zoom); e.Use(); Repaint(); }
-                    else if (e.type == EventType.MouseDown && e.button == 0 && selected >= 0)
-                    {
-                        var point = new Vector2((e.mousePosition.x - image.x) / image.width, 1 - (e.mousePosition.y - image.y) / image.height);
-                        var island = FBXUVIslandExtractor.HitTest(pane.Islands, point);
-                        if (island != null) { pane.Island = island.id; Save(index, pane); }
-                        e.Use();
-                    }
-                }
-                GUI.EndGroup();
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    if (GUILayout.Button("全体")) { pane.Center = Vector2.one * .5f; pane.Zoom = 1; }
-                    if (GUILayout.Button("候補を拡大"))
-                    {
-                        var island = pane.Islands.Find(i => i.id == pane.Island);
-                        if (island != null) { pane.Center = island.bounds.Center; pane.Zoom = Mathf.Clamp(.8f / Mathf.Max(island.bounds.Width, island.bounds.Height), 1, 64); }
-                    }
-                }
-                using (new EditorGUI.DisabledScope(selected < 0 || pane.Island < 0))
-                    if (GUILayout.Button("このアイランドを保存")) Save(index, pane);
-                EditorGUILayout.LabelField("保存済み", saved?.region?.mesh == null ? "未選択" : $"{saved.rendererPath} / Submesh {saved.region.subMeshIndex} / UV {saved.region.uvChannel} / Island {saved.region.islandId}", EditorStyles.wordWrappedMiniLabel);
-                if (pane.Candidates.Count == 0) EditorGUILayout.HelpBox(isTarget ? "CanvasのTarget Textureを使用する候補がありません。" : "Model / Prefabを指定してください。", MessageType.Warning);
-                if (pane.Error != null) EditorGUILayout.HelpBox(pane.Error, MessageType.Warning);
-            }
+            return $"転送元の瞳孔中心: ({mapping.MeasuredCenter.x:F4}, {mapping.MeasuredCenter.y:F4})\n"
+                + $"虹彩に対する幅・高さ: {mapping.MeasuredSize.x:P2} / {mapping.MeasuredSize.y:P2}　縦横比（幅÷高さ）: {mapping.MeasuredAspect:F4}";
         }
 
-        private static bool Same(Candidate a, Candidate b) => a != null && b != null && a.Mesh == b.Mesh && a.Path == b.Path && a.Submesh == b.Submesh;
-        private static void Extract(Pane pane)
+        // Measurement and validation results describe the previous configuration.
+        private void ClearResults()
         {
-            pane.Error = null; pane.Islands.Clear();
-            if (pane.Candidate == null) return;
-            try { pane.Islands = FBXUVIslandExtractor.Extract(pane.Candidate.Mesh, pane.Candidate.Submesh, pane.Uv); }
-            catch (Exception e) { pane.Error = e.Message; }
+            measurement = null;
+            message = null;
         }
-        private Texture TargetTexture() => FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out var canvas, out _, out _) ? canvas.TargetTexture?.SelectTexture : null;
 
-        private static List<Candidate> Collect(GameObject root, Texture texture, bool target)
-        {
-            var result = new List<Candidate>();
-            if (root == null || (target && texture == null)) return result;
-            if (target)
-            {
-                foreach (var candidate in FBXUVTargetMeshCollector.CollectRenderers(root, texture))
-                    Add(candidate.Renderer, candidate.Mesh, candidate.SubMeshIndices);
-            }
-            else
-            {
-                foreach (var candidate in FBXUVRendererMeshUtility.Collect(root))
-                    Add(candidate.Renderer, candidate.Mesh, Enumerable.Range(0, candidate.Mesh.subMeshCount));
-            }
-            return result;
+        private int EyeCount() => Layer == null || Layer.eyes == null ? 0 : Layer.eyes.Count;
 
-            void Add(Renderer renderer, Mesh mesh, IEnumerable<int> subMeshIndices)
-            {
-                var path = FBXUVEyeGeometry.Path(root.transform, renderer.transform);
-                if (target)
-                {
-                    // Retain the existing rejection of ambiguous saved renderer paths.
-                    try
-                    {
-                        FBXUVEyeGeometry.ResolveRenderer(root,
-                            new FBXUVEyeRegion { rendererPath = path, region = new FBXUVTransferRegion { mesh = mesh } });
-                    }
-                    catch (ArgumentException) { return; }
-                }
-                foreach (var sub in subMeshIndices)
-                    result.Add(new Candidate { Mesh = mesh, Path = path, Submesh = sub, Label = (string.IsNullOrEmpty(path) ? root.name : path) + " / " + sub });
-            }
-        }
-        private void Save(int index, Pane pane)
+        private FBXUVEyeBinding CurrentEye() => selectedEye >= 0 && selectedEye < EyeCount() ? Layer.eyes[selectedEye] : null;
+
+        // The stored renderer path is passed exactly, including "" for the root renderer.
+        private FBXUVSavedRegion SavedRegion(int paneIndex)
         {
-            var island = pane.Islands.Find(i => i.id == pane.Island); if (island == null || pane.Candidate == null) return;
-            Undo.RecordObject(layer, "目のUVアイランドを保存");
-            var selection = new FBXUVEyeRegion
-            {
-                rendererPath = pane.Candidate.Path,
-                region = new FBXUVTransferRegion { mesh = pane.Candidate.Mesh, subMeshIndex = pane.Candidate.Submesh,
-                    uvChannel = pane.Uv, islandId = island.id, triangles = island.triangles.ToList(), bounds = island.bounds,
-                    meshHash = FBXUVMeshUtility.ComputeMeshContentHash(pane.Candidate.Mesh, pane.Candidate.Submesh, pane.Uv) }
-            };
-            var eye = layer.eyes[selectedEye];
-            if (index == 0) eye.iris = selection; else if (index == 1) eye.pupil = selection; else eye.target = selection;
-            Changed(); Measure(eye);
+            var eye = CurrentEye();
+            var eyeRegion = eye == null ? null : paneIndex == IrisPane ? eye.iris : paneIndex == PupilPane ? eye.pupil : eye.target;
+            return FBXUVSavedRegion.From(eyeRegion?.region, eyeRegion?.rendererPath);
         }
     }
 }

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using nadena.dev.ndmf;
 using net.rs64.TexTransTool.MultiLayerImage;
 using UnityEngine;
@@ -21,7 +20,7 @@ namespace GokouKotori.FBXUVTextureTransfer
         internal bool IsEnabledInHierarchy => enabled && gameObject.activeInHierarchy;
         public Shader ResolveEyeShader() => eyeShader != null ? eyeShader : Resources.Load<Shader>("FBXUVTextureTransfer/EyeTransfer");
         public ComputeShader ResolvePixelProcessShader() => pixelProcessShader != null ? pixelProcessShader : FBXUVTextureTransferResources.LoadPixelProcessShader();
-        public bool HasExclusiveExternalToolImplementation() => GetComponents<MonoBehaviour>().Count(b => b is IExternalToolCanBehaveAsLayer) == 1;
+        public bool HasExclusiveExternalToolImplementation() => FBXUVLayerUtility.HasExclusiveImplementation(this);
         public bool CanRender(out string reason) => TryPrepare(out _, out reason);
 
         internal bool TryPrepare(out List<FBXUVEyeMapping> mappings, out string reason)
@@ -52,18 +51,15 @@ namespace GokouKotori.FBXUVTextureTransfer
 
         public void LoadImage(RenderTexture writeDistentionTexture)
         {
-            if (writeDistentionTexture == null) return;
-            try
-            {
-                FBXUVTextureTransferRenderer.Clear(writeDistentionTexture);
-                if (!IsEnabledInHierarchy || !TryPrepare(out var mappings, out _)) return;
-                FBXUVEyeTextureTransferRenderer.Render(this, writeDistentionTexture, mappings);
-            }
-            catch (Exception e)
-            {
-                FBXUVTextureTransferRenderer.Clear(writeDistentionTexture);
-                Debug.LogError("FBX UV Eye Texture Transferの生成に失敗しました。透明レイヤーを返します。\n" + e, this);
-            }
+            FBXUVLayerUtility.LoadImage(writeDistentionTexture, this, RenderIfReady,
+                "FBX UV Eye Texture Transferの生成に失敗しました。透明レイヤーを返します。",
+                "FBX UV Eye Texture Transferの透明fallback生成に失敗しました。");
+        }
+
+        private void RenderIfReady(RenderTexture destination)
+        {
+            if (!IsEnabledInHierarchy || !TryPrepare(out var mappings, out _)) return;
+            FBXUVEyeTextureTransferRenderer.Render(this, destination, mappings);
         }
 
         private void Reset() => EnsureResources();
@@ -74,7 +70,7 @@ namespace GokouKotori.FBXUVTextureTransfer
         }
         private void EnsureResources()
         {
-            if (GetComponent<ExternalToolAsLayer>() == null) gameObject.AddComponent<ExternalToolAsLayer>();
+            FBXUVLayerUtility.EnsureExternalToolAsLayer(gameObject);
             if (eyeShader == null) eyeShader = ResolveEyeShader();
             if (pixelProcessShader == null) pixelProcessShader = ResolvePixelProcessShader();
         }

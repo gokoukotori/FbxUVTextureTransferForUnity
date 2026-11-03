@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using GokouKotori.FBXUVTextureTransfer.Editor.NDMF;
 using UnityEditor;
-using UnityEditorInternal;
 using UnityEngine;
 using Unity.Profiling;
 using UnityEngine.Rendering;
@@ -31,25 +30,12 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             FBXUVTransferOrientation.Rotate180,
         };
 
-        private ReorderableList bindingList;
         private IReadOnlyList<FBXUVTransferValidationIssue> lastValidationIssues;
-        private readonly Dictionary<int, string> bindingNameErrors = new Dictionary<int, string>();
         private string targetAutoResolutionError;
 
         private void OnEnable()
         {
             TryPopulateTargetModelOrPrefab();
-            var bindings = FBXUVRegionBindingSerializedPropertyUtility.FindBindings(serializedObject);
-            bindingList = new ReorderableList(serializedObject, bindings, true, true, true, true)
-            {
-                drawHeaderCallback = rect => EditorGUI.LabelField(rect, "Region Binding（上から合成順）"),
-                elementHeightCallback = BindingElementHeight,
-                drawElementCallback = DrawBinding,
-                onAddCallback = AddBinding,
-                onRemoveCallback = RemoveBinding,
-                onCanRemoveCallback = list => list.count > 0,
-                onReorderCallback = _ => bindingNameErrors.Clear()
-            };
         }
 
         public override void OnInspectorGUI()
@@ -79,13 +65,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                     new GUIContent("転送元テクスチャ"));
 
                 EditorGUILayout.Space(4f);
-                bindingList?.DoLayoutList();
-                if (bindingList == null || bindingList.serializedProperty.arraySize == 0)
-                {
-                    EditorGUILayout.HelpBox(
-                        "Regionがありません。このコンポーネントの＋ボタンから追加してください。",
-                        MessageType.Warning);
-                }
+                // Regions are edited in the UV Region Editor only, like the eyes and landmarks of the other layers.
+                var bindings = FBXUVRegionBindingSerializedPropertyUtility.FindBindings(serializedObject);
+                EditorGUILayout.LabelField("登録したRegion", (bindings?.arraySize ?? 0).ToString());
 
                 if (GUILayout.Button("UV領域エディターを開く"))
                 {
@@ -134,106 +116,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
 
             targetAutoResolutionError = error;
-        }
-
-        private void DrawBinding(Rect rect, int index, bool isActive, bool isFocused)
-        {
-            var binding = bindingList.serializedProperty.GetArrayElementAtIndex(index);
-            var enabled = binding.FindPropertyRelative("enabled");
-            var name = binding.FindPropertyRelative("name");
-            var orientation = binding.FindPropertyRelative("orientation");
-            var line = EditorGUIUtility.singleLineHeight;
-            var toggleRect = new Rect(rect.x, rect.y + 2f, 18f, line);
-            var nameRect = new Rect(rect.x + 22f, rect.y + 2f, rect.width - 22f, line);
-            var orientationRect = new Rect(rect.x + 22f, rect.y + line + 6f, rect.width - 22f, line);
-
-            enabled.boolValue = EditorGUI.Toggle(toggleRect, enabled.boolValue);
-            var requestedName = EditorGUI.DelayedTextField(nameRect, name.stringValue);
-            if (!string.Equals(requestedName, name.stringValue, StringComparison.Ordinal))
-            {
-                if (FBXUVRegionBindingSerializedPropertyUtility.TryRename(
-                        bindingList.serializedProperty,
-                        index,
-                        requestedName,
-                        out var error))
-                {
-                    bindingNameErrors.Remove(index);
-                }
-                else
-                {
-                    bindingNameErrors[index] = error;
-                }
-            }
-            var orientationPopupRect = EditorGUI.PrefixLabel(
-                orientationRect,
-                new GUIContent("向き補正", "転送元画像を転送先の領域へ配置する向きを手動で指定します。"));
-            var currentIndex = OrientationPopupIndex(orientation.intValue);
-            EditorGUI.BeginChangeCheck();
-            var selectedIndex = EditorGUI.Popup(
-                orientationPopupRect,
-                currentIndex,
-                OrientationLabels);
-            if (EditorGUI.EndChangeCheck()) orientation.intValue = (int)OrientationValues[selectedIndex];
-
-            if (bindingNameErrors.TryGetValue(index, out var nameError))
-            {
-                var helpBoxRect = new Rect(
-                    rect.x + 22f,
-                    rect.y + line * 2f + 10f,
-                    rect.width - 22f,
-                    EditorGUIUtility.singleLineHeight * 2f);
-                EditorGUI.HelpBox(helpBoxRect, nameError, MessageType.Error);
-            }
-        }
-
-        private float BindingElementHeight(int index)
-        {
-            var height = EditorGUIUtility.singleLineHeight * 2f + 8f;
-            if (bindingNameErrors.ContainsKey(index))
-            {
-                height += EditorGUIUtility.singleLineHeight * 2f + 4f;
-            }
-
-            return height;
-        }
-
-        private void AddBinding(ReorderableList list)
-        {
-            var index = FBXUVRegionBindingSerializedPropertyUtility.Add(list.serializedProperty);
-            if (index < 0) return;
-
-            bindingNameErrors.Clear();
-            list.index = index;
-        }
-
-        private void RemoveBinding(ReorderableList list)
-        {
-            var index = list.index;
-            if (index < 0 || index >= list.serializedProperty.arraySize) return;
-
-            var binding = list.serializedProperty.GetArrayElementAtIndex(index);
-            var regionName = binding.FindPropertyRelative("name").stringValue;
-            if (!EditorUtility.DisplayDialog(
-                    "Regionを削除",
-                    $"「{regionName}」を削除しますか？\n転送元／転送先のUV島の選択も削除されます。",
-                    "削除",
-                    "キャンセル"))
-            {
-                return;
-            }
-
-            if (!FBXUVRegionBindingSerializedPropertyUtility.DeleteAt(list.serializedProperty, index)) return;
-
-            bindingNameErrors.Clear();
-            list.index = Mathf.Min(index, list.serializedProperty.arraySize - 1);
-        }
-
-        internal static string OrientationLabel(FBXUVTransferOrientation orientation)
-        {
-            var index = Array.IndexOf(OrientationValues, orientation);
-            return index >= 0
-                ? OrientationLabels[index]
-                : "不正な値";
         }
 
         internal static int OrientationPopupIndex(int serializedValue)

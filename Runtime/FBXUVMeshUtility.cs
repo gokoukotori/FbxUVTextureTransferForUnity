@@ -18,11 +18,6 @@ namespace GokouKotori.FBXUVTextureTransfer
             return new FBXUVMeshAnalysisCache().Get(mesh, subMeshIndex, uvChannel).GetTriangles();
         }
 
-        public static string ComputeMeshContentHash(Mesh mesh, int subMeshIndex, int uvChannel)
-        {
-            return new FBXUVMeshAnalysisCache().Get(mesh, subMeshIndex, uvChannel).GetContentHash();
-        }
-
         public static bool IsMeshHashCurrent(FBXUVTransferRegion region)
         {
             return IsMeshHashCurrent(region, new FBXUVMeshAnalysisCache());

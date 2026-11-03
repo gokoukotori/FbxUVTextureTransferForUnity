@@ -81,39 +81,19 @@ namespace GokouKotori.FBXUVTextureTransfer
             return true;
         }
 
-        public bool HasExclusiveExternalToolImplementation()
-        {
-            var behaviours = GetComponents<MonoBehaviour>();
-            var count = 0;
-            for (var index = 0; index < behaviours.Length; index++)
-            {
-                if (behaviours[index] is IExternalToolCanBehaveAsLayer) count++;
-            }
-            return count == 1;
-        }
+        public bool HasExclusiveExternalToolImplementation() => FBXUVLayerUtility.HasExclusiveImplementation(this);
 
         public void LoadImage(RenderTexture writeDistentionTexture)
         {
-            if (writeDistentionTexture == null) return;
-            try
-            {
-                FBXUVTextureTransferRenderer.Clear(writeDistentionTexture);
-                string reason;
-                if (!IsEnabledInHierarchy || !CanRender(out reason)) return;
-                FBXUVTextureTransferRenderer.Render(this, writeDistentionTexture);
-            }
-            catch (Exception exception)
-            {
-                try
-                {
-                    FBXUVTextureTransferRenderer.Clear(writeDistentionTexture);
-                }
-                catch (Exception clearException)
-                {
-                    Debug.LogError("FBX UV Texture Transferの透明fallback生成にも失敗しました。\n" + clearException, this);
-                }
-                Debug.LogError("FBX UV Texture Transferのレイヤープレビュー生成に失敗しました。透明レイヤーを返します。\n" + exception, this);
-            }
+            FBXUVLayerUtility.LoadImage(writeDistentionTexture, this, RenderIfReady,
+                "FBX UV Texture Transferのレイヤープレビュー生成に失敗しました。透明レイヤーを返します。",
+                "FBX UV Texture Transferの透明fallback生成にも失敗しました。");
+        }
+
+        private void RenderIfReady(RenderTexture destination)
+        {
+            if (!IsEnabledInHierarchy || !CanRender(out _)) return;
+            FBXUVTextureTransferRenderer.Render(this, destination);
         }
 
         private static bool IsRegionReady(FBXUVTransferRegion region, FBXUVMeshAnalysisCache analysisCache)
@@ -146,10 +126,7 @@ namespace GokouKotori.FBXUVTextureTransfer
 
         private void EnsureExternalToolAsLayer()
         {
-            if (GetComponent<ExternalToolAsLayer>() == null)
-            {
-                gameObject.AddComponent<ExternalToolAsLayer>();
-            }
+            FBXUVLayerUtility.EnsureExternalToolAsLayer(gameObject);
         }
     }
 }

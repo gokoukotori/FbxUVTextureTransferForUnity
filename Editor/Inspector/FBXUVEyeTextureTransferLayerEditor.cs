@@ -30,7 +30,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (!string.IsNullOrEmpty(message)) EditorGUILayout.HelpBox(message, MessageType.Info);
         }
 
-        internal static void DrawConfiguration(SerializedObject serialized)
+        private static void DrawConfiguration(SerializedObject serialized)
         {
             Model(serialized, "sourceModelOrPrefab", "転送元 Model / Prefab");
             Model(serialized, "targetModelOrPrefab", "転送先 Model / Prefab");

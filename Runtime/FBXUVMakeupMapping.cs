@@ -11,7 +11,6 @@ namespace GokouKotori.FBXUVTextureTransfer
         public FBXUVMakeupExactMap Exact { get; private set; }
         public FBXUVMakeupExactMap Mouth { get; private set; }
         public string BoundaryReason { get; private set; }
-        public string Mode => Exact == null ? "TPS" : Mouth == null ? "Exact" : "Exact+Mouth";
 
         public static FBXUVMakeupMapping Create(FBXUVMakeupTransferLayer layer)
         {

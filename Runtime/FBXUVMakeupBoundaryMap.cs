@@ -80,47 +80,10 @@ namespace GokouKotori.FBXUVTextureTransfer
         {
             mouth = null;
             if (region?.triangles == null || controls.Length != 8) return false;
-            var points = new List<Vector2>(); var ids = new Dictionary<(long, long), int>();
-            var edges = new Dictionary<(int, int), int>();
-            foreach (var triangle in region.triangles)
+            if (!FBXUVBoundaryUtility.TryAnalyze(region.triangles, true, MaximumBoundaryPoints, out var analysis, out _)) return false;
+            var candidates = new List<(double, List<Vector2>)>();
+            foreach (var loop in analysis.ClosedLoops)
             {
-                if (triangle == null) return false;
-                var face = new int[3];
-                for (var i = 0; i < 3; i++)
-                {
-                    var uv = triangle.GetPoint(i);
-                    if (!FBXUVMakeupWarp.IsUnitUv(uv)) return false;
-                    var key = ((long)Math.Round(uv.x * 1000000d), (long)Math.Round(uv.y * 1000000d));
-                    if (!ids.TryGetValue(key, out var id))
-                    { id = points.Count; ids.Add(key, id); points.Add(new Vector2(key.Item1 / 1000000f, key.Item2 / 1000000f)); }
-                    face[i] = id;
-                }
-                if (face.Distinct().Count() != 3 || Math.Abs(Area(points, face)) <= 1e-14) continue;
-                for (var i = 0; i < 3; i++)
-                { var key = Edge(face[i], face[(i + 1) % 3]); edges.TryGetValue(key, out var count); edges[key] = count + 1; }
-            }
-            var adjacency = new Dictionary<int, List<int>>();
-            foreach (var edge in edges.Where(e => e.Value == 1).Select(e => e.Key))
-            {
-                if (!adjacency.ContainsKey(edge.Item1)) adjacency.Add(edge.Item1, new List<int>());
-                if (!adjacency.ContainsKey(edge.Item2)) adjacency.Add(edge.Item2, new List<int>());
-                adjacency[edge.Item1].Add(edge.Item2); adjacency[edge.Item2].Add(edge.Item1);
-            }
-            var remaining = new HashSet<int>(adjacency.Keys); var candidates = new List<(double, List<Vector2>)>();
-            while (remaining.Count > 0)
-            {
-                var first = remaining.Min(); var component = new HashSet<int> { first }; var queue = new Queue<int>(); queue.Enqueue(first);
-                while (queue.Count > 0)
-                    foreach (var next in adjacency[queue.Dequeue()]) if (component.Add(next)) queue.Enqueue(next);
-                remaining.ExceptWith(component);
-                if (component.Count > MaximumBoundaryPoints || component.Any(i => adjacency[i].Count != 2)) continue;
-                var loop = new List<Vector2>(); var current = first; var previous = -1;
-                do
-                {
-                    loop.Add(points[current]); var next = adjacency[current][0] == previous ? adjacency[current][1] : adjacency[current][0];
-                    previous = current; current = next;
-                } while (current != first && loop.Count <= component.Count);
-                if (current != first || loop.Count < 3) continue;
                 var score = controls.Average(c => DistanceToBoundary(c, loop));
                 var span = loop.Max(v => v.x) - loop.Min(v => v.x);
                 // Reject a distant or unrelated outer/eye boundary. Do not guess across missing loops.

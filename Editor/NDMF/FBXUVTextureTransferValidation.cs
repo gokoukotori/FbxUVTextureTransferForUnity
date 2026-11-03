@@ -407,10 +407,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             var mesh = region.FindPropertyRelative("mesh")?.objectReferenceValue as Mesh;
             if (mesh == null || avatarRoot == null) return;
 
-            var found = avatarRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true)
-                .Any(renderer => renderer.sharedMesh == mesh)
-                || avatarRoot.GetComponentsInChildren<MeshFilter>(true)
-                    .Any(filter => filter.sharedMesh == mesh);
+            var found = FBXUVModelPrefabReferenceUtility.ContainsMesh(avatarRoot, mesh);
             if (!found)
             {
                 Add(

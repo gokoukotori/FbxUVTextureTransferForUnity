@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using Point = GokouKotori.FBXUVTextureTransfer.FBXUVTriangleIntersection.Point;
 
 namespace GokouKotori.FBXUVTextureTransfer
 {
@@ -116,7 +117,6 @@ namespace GokouKotori.FBXUVTextureTransfer
         }
 
         private static double Cross(Vector2 a, Vector2 b) => (double)a.x * b.y - (double)a.y * b.x;
-        private static Vector3Int Key(Vector3 p) => new Vector3Int(Mathf.RoundToInt(p.x * 1000000), Mathf.RoundToInt(p.y * 1000000), Mathf.RoundToInt(p.z * 1000000));
 
         private sealed class Surface
         {
@@ -133,19 +133,12 @@ namespace GokouKotori.FBXUVTextureTransfer
             {
                 this.label = label;
                 this.method = method;
-                var ids = new Dictionary<Vector3Int, int>(); var positions = new List<Vector3>();
-                cornerIds = new int[geometry.Positions.Length];
-                for (var i = 0; i < cornerIds.Length; i++)
-                {
-                    var p = geometry.Positions[i]; var key = Key(p);
-                    if (!ids.TryGetValue(key, out var index)) { index = positions.Count; ids.Add(key, index); positions.Add(p); }
-                    cornerIds[i] = index;
-                }
+                FBXUVEyeGeometry.WeldPositions(geometry.Positions, out var positions, out cornerIds, out var ids);
                 projected = positions.Select(frame.Project).ToArray();
                 Plane = projected.Select(p => (Vector2)p).ToArray();
                 boundary = Enumerable.Repeat(-1, positions.Count).ToArray();
                 for (var loop = 0; loop < geometry.Loops.Count; loop++)
-                    foreach (var p in geometry.Loops[loop]) boundary[ids[Key(p)]] = loop;
+                    foreach (var p in geometry.Loops[loop]) boundary[ids[FBXUVEyeGeometry.SpatialKey(p)]] = loop;
                 weights = Enumerable.Range(0, positions.Count).Select(_ => new Dictionary<int, double>()).ToArray();
                 diagonal = new double[positions.Count];
                 for (var i = 0; i < cornerIds.Length; i += 3)
@@ -295,31 +288,12 @@ namespace GokouKotori.FBXUVTextureTransfer
                     }
             }
 
-            private struct Point
+            private double IntersectionArea(Vector2[] points, int first, int second)
             {
-                internal double X,Y;
-                internal Point(Vector2 v) { X=v.x;Y=v.y; }
-                internal Point(double x,double y) { X=x;Y=y; }
-            }
-            private static double Side(Point a,Point b,Point c) => (b.X-a.X)*(c.Y-a.Y)-(b.Y-a.Y)*(c.X-a.X);
-            private double IntersectionArea(Vector2[] points,int first,int second)
-            {
-                var polygon=new List<Point>(6);var clip=new Point[3];
-                for(var k=0;k<3;k++) { polygon.Add(new Point(points[cornerIds[first*3+k]]));clip[k]=new Point(points[cornerIds[second*3+k]]); }
-                var orientation=Math.Sign(Side(clip[0],clip[1],clip[2]));
-                for(var edge=0;edge<3 && polygon.Count>=3;edge++)
-                {
-                    var output=new List<Point>(6);var a=clip[edge];var b=clip[(edge+1)%3];
-                    for(var i=0;i<polygon.Count;i++)
-                    {
-                        var p=polygon[i];var q=polygon[(i+1)%polygon.Count];var sp=Side(a,b,p)*orientation;var sq=Side(a,b,q)*orientation;
-                        if(sp>=0) output.Add(p);
-                        if((sp>=0)!=(sq>=0)) { var t=sp/(sp-sq);output.Add(new Point(p.X+(q.X-p.X)*t,p.Y+(q.Y-p.Y)*t)); }
-                    }
-                    polygon=output;
-                }
-                double area=0;for(var i=1;i+1<polygon.Count;i++) area+=Side(polygon[0],polygon[i],polygon[i+1]);
-                return Math.Abs(area)*.5;
+                return FBXUVTriangleIntersection.Area(
+                    new Point(points[cornerIds[first * 3]]), new Point(points[cornerIds[first * 3 + 1]]),
+                    new Point(points[cornerIds[first * 3 + 2]]), new Point(points[cornerIds[second * 3]]),
+                    new Point(points[cornerIds[second * 3 + 1]]), new Point(points[cornerIds[second * 3 + 2]]));
             }
         }
     }

@@ -8,9 +8,12 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 {
     internal sealed class FBXUVEyeManualEditor : IDisposable
     {
+        internal readonly Rect[] imageScreenRects = new Rect[2];
         private string state, error;
         private FBXUVEyeMapping baselineMap;
         private FBXUVEyeManualWarp coordinates, previewWarp;
+        private FBXUVEyeManualWarp[] partCoordinates, partPreviewWarps;
+        private int activePart;
         private FBXUVEyeManualSettings draft;
         private RenderTexture before, after;
         private int selected = -1, tool, dragControl;
@@ -73,7 +76,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             try
             {
                 baselineMap = Map(new FBXUVEyeManualSettings());
-                coordinates = new FBXUVEyeManualWarp(baselineMap);
+                partCoordinates = baselineMap.AllParts.Select(p => new FBXUVEyeManualWarp(p)).ToArray();
+                partPreviewWarps = new FBXUVEyeManualWarp[partCoordinates.Length];
+                SelectPart(partCoordinates.Length - 1);
                 before = Render(baselineMap);
                 FrameEyes();
                 if (!TryPreview(eye.manual ?? new FBXUVEyeManualSettings())) after = Render(baselineMap);
@@ -94,8 +99,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private RenderTexture Render(FBXUVEyeMapping mapping)
         {
-            var texture = FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out var canvas, out _, out _)
-                ? canvas.TargetTexture?.SelectTexture : null;
+            var texture = FBXUVCanvasHierarchyUtility.ResolveTargetTexture(layer);
             var scale = texture == null ? 1 : Mathf.Min(1, 1024f / Mathf.Max(texture.width, texture.height));
             var rt = new RenderTexture(texture == null ? 512 : Mathf.Max(1, Mathf.RoundToInt(texture.width * scale)),
                 texture == null ? 512 : Mathf.Max(1, Mathf.RoundToInt(texture.height * scale)), 0,
@@ -119,7 +123,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             {
                 var mapping = Map(candidate);
                 var result = Render(mapping);
-                Destroy(after); after = result; previewWarp = mapping.ManualWarp; error = null;
+                Destroy(after); after = result;
+                partPreviewWarps = mapping.AllParts.Select(p => p.ManualWarp).ToArray();
+                SelectPart(activePart); error = null;
                 return true;
             }
             catch (Exception e) { error = e.Message; return false; }
@@ -142,6 +148,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             if (settings.pins == null || selected < 0 || selected >= settings.pins.Count) return;
             var pin = settings.pins[selected]; if (pin == null) return;
+            var coordinates = Coordinates(pin);
             EditorGUILayout.LabelField($"選択中：{(pin.fixedPoint ? "固定" : "補正")}ピン {selected + 1}", EditorStyles.boldLabel);
             using (new EditorGUI.DisabledScope(dragControl != 0 || !settings.enabled))
             {
@@ -187,6 +194,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 var size = Mathf.Min(rect.width, rect.height) * zoom[index];
                 var image = new Rect(rect.width * .5f - centers[index].x * size,
                     rect.height * .5f - (1 - centers[index].y) * size, size, size);
+                imageScreenRects[index] = new Rect(GUIUtility.GUIToScreenPoint(image.position), image.size);
                 if (texture != null) GUI.DrawTexture(image, texture, ScaleMode.StretchToFill, true);
                 if (Event.current.type == EventType.Repaint)
                 {
@@ -194,11 +202,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                     if (showOutline)
                     {
                         Handles.color = Color.cyan;
-                        var geometry = index == 0 ? baselineMap.Iris : baselineMap.Target;
-                        foreach (var loop in geometry.Loops)
+                        foreach (var part in baselineMap.AllParts)
                         {
-                            var points = loop.Select(p => geometry.Uvs[Array.IndexOf(geometry.Positions, p)]).ToArray();
-                            for (var i = 0; i < points.Length; i++) Handles.DrawLine(ToGui(image, points[i]), ToGui(image, points[(i + 1) % points.Length]));
+                            var geometry = index == 0 ? part.Iris : part.Target;
+                            foreach (var loop in geometry.Loops)
+                            {
+                                var points = loop.Select(p => geometry.Uvs[Array.IndexOf(geometry.Positions, p)]).ToArray();
+                                for (var i = 0; i < points.Length; i++) Handles.DrawLine(FBXUVPreviewViewport.ToGui(image, points[i]), FBXUVPreviewViewport.ToGui(image, points[(i + 1) % points.Length]));
+                            }
                         }
                     }
                     if (index == 1 && showGrid) DrawGrid(image);
@@ -217,7 +228,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             for (var i = 0; i < settings.pins.Count; i++)
             {
                 var pin = settings.pins[i]; if (pin == null || !PinUv(index, pin, out var uv)) continue;
-                var point = ToGui(image, uv);
+                var coordinates = Coordinates(pin);
+                var point = FBXUVPreviewViewport.ToGui(image, uv);
                 var color = i == selected && !string.IsNullOrEmpty(error) ? Color.red : i == selected ? Color.yellow : Color.white;
                 Handles.color = color;
                 if (pin.fixedPoint) EditorGUI.DrawRect(new Rect(point.x - 4, point.y - 4, 8, 8), color);
@@ -225,14 +237,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 GUI.Label(new Rect(point.x + 6, point.y - 10, 40, 20), (i + 1).ToString());
                 if (index == 1 && i == selected)
                 {
-                    if (coordinates.TryTargetUv(pin.origin, out var origin)) Handles.DrawDottedLine(ToGui(image, origin), point, 3);
+                    if (coordinates.TryTargetUv(pin.origin, out var origin)) Handles.DrawDottedLine(FBXUVPreviewViewport.ToGui(image, origin), point, 3);
                     var radius = coordinates.EffectiveRadius(pin.position, pin.radius);
                     Vector3? last = null;
                     for (var k = 0; k <= 64; k++)
                     {
                         var a = k * Mathf.PI * 2 / 64;
                         if (!coordinates.TryTargetUv(pin.position + new Vector2(Mathf.Cos(a), Mathf.Sin(a)) * radius, out var edge)) { last = null; continue; }
-                        var next = ToGui(image, edge); if (last.HasValue) Handles.DrawLine(last.Value, next); last = next;
+                        var next = FBXUVPreviewViewport.ToGui(image, edge); if (last.HasValue) Handles.DrawLine(last.Value, next); last = next;
                     }
                 }
             }
@@ -241,22 +253,47 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         private void DrawGrid(Rect image)
         {
             Handles.color = new Color(1, 1, 1, .35f);
-            for (var axis = 0; axis < 2; axis++)
-                for (var row = -8; row <= 8; row++)
-                {
-                    Vector3? last = null;
-                    for (var col = -32; col <= 32; col++)
+            for (var part = 0; part < partCoordinates.Length; part++)
+            {
+                var coordinates = partCoordinates[part]; var warp = partPreviewWarps[part];
+                for (var axis = 0; axis < 2; axis++)
+                    for (var row = -8; row <= 8; row++)
                     {
-                        var p = axis == 0 ? new Vector2(row / 8f, col / 32f) : new Vector2(col / 32f, row / 8f);
-                        if (!compare && previewWarp != null) p = previewWarp.Forward(p);
-                        if (!coordinates.TryTargetUv(p, out var uv)) { last = null; continue; }
-                        var next = ToGui(image, uv); if (last.HasValue) Handles.DrawLine(last.Value, next); last = next;
+                        Vector3? last = null;
+                        for (var col = -32; col <= 32; col++)
+                        {
+                            var p = axis == 0 ? new Vector2(row / 8f, col / 32f) : new Vector2(col / 32f, row / 8f);
+                            if (!compare && warp != null) p = warp.Forward(p);
+                            if (!coordinates.TryTargetUv(p, out var uv)) { last = null; continue; }
+                            var next = FBXUVPreviewViewport.ToGui(image, uv); if (last.HasValue) Handles.DrawLine(last.Value, next); last = next;
+                        }
                     }
-                }
+            }
         }
 
-        private bool PinUv(int index, FBXUVEyeManualPin pin, out Vector2 uv) => index == 0
-            ? coordinates.TrySourceUv(pin.origin, out uv) : coordinates.TryTargetUv(compare ? pin.origin : pin.position, out uv);
+        private FBXUVEyeManualWarp Coordinates(FBXUVEyeManualPin pin) => partCoordinates[
+            pin.targetComponent < 0 ? partCoordinates.Length - 1 : Mathf.Min(pin.targetComponent, partCoordinates.Length - 1)];
+
+        private void SelectPart(int part)
+        {
+            activePart = part;
+            coordinates = partCoordinates[part]; previewWarp = partPreviewWarps[part];
+        }
+
+        private bool LocateTarget(Vector2 uv, out Vector2 point)
+        {
+            // The last part is also the one visible where the selected UVs overlap.
+            for (var part = partCoordinates.Length - 1; part >= 0; part--)
+                if (partCoordinates[part].TryTargetPoint(uv, out point)) { SelectPart(part); return true; }
+            point = default; return false;
+        }
+
+        private bool PinUv(int index, FBXUVEyeManualPin pin, out Vector2 uv)
+        {
+            var coordinates = Coordinates(pin);
+            return index == 0 ? coordinates.TrySourceUv(pin.origin, out uv)
+                : coordinates.TryTargetUv(compare ? pin.origin : pin.position, out uv);
+        }
 
         private void HandleInput(int index, Rect rect, Rect image, int control)
         {
@@ -273,6 +310,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             {
                 var uv = ToUv(image, e.mousePosition);
                 Vector2 point;
+                var coordinates = Coordinates(draft.pins[selected]);
                 var located = index == 0 ? coordinates.TryPointFromSourceUv(uv, out point) : coordinates.TryTargetPoint(uv, out point);
                 if (!located) { validDraft = false; error = "目の領域外には移動できません。"; }
                 else
@@ -292,11 +330,11 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 var settings = eye.manual;
                 if (tool != 0 && index == 1)
                 {
-                    if (coordinates.TryTargetPoint(ToUv(image, e.mousePosition), out var point) && coordinates.CanPlace(point))
+                    if (LocateTarget(ToUv(image, e.mousePosition), out var point) && coordinates.CanPlace(point))
                     {
                         var candidate = settings.Copy();
                         if (candidate.pins.Count == 0) candidate.BindRegions(eye);
-                        candidate.pins.Add(new FBXUVEyeManualPin { position = point, origin = previewWarp?.Inverse(point) ?? point, fixedPoint = tool == 2 });
+                        candidate.pins.Add(new FBXUVEyeManualPin { position = point, origin = previewWarp?.Inverse(point) ?? point, fixedPoint = tool == 2, targetComponent = activePart });
                         if (TryPreview(candidate)) { selected = candidate.pins.Count - 1; tool = 0; Commit(candidate); }
                     }
                     else error = "虹彩の内部を選んでください。外周と別パーツの瞳孔にはピンを置けません。";
@@ -307,7 +345,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                     if (settings.pins != null)
                         for (var i = 0; i < settings.pins.Count; i++)
                             if (settings.pins[i] != null && PinUv(index, settings.pins[i], out var uv)
-                                && Vector2.Distance(ToGui(image, uv), e.mousePosition) < 10) { selected = i; break; }
+                                && Vector2.Distance(FBXUVPreviewViewport.ToGui(image, uv), e.mousePosition) < 10) { selected = i; break; }
                     if (selected >= 0 && !settings.pins[selected].fixedPoint)
                     {
                         draft = settings.Copy(); validDraft = TryPreview(draft);
@@ -336,14 +374,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
         }
 
-        private static Vector2 ToGui(Rect r, Vector2 uv) => new Vector2(r.x + uv.x * r.width, r.y + (1 - uv.y) * r.height);
         private static Vector2 ToUv(Rect r, Vector2 p) => new Vector2((p.x - r.x) / r.width, 1 - (p.y - r.y) / r.height);
         private static void Destroy(RenderTexture rt) { if (rt != null) { rt.Release(); Object.DestroyImmediate(rt); } }
         internal void Reset()
         {
             if (dragControl != 0 && GUIUtility.hotControl == dragControl) GUIUtility.hotControl = 0;
             dragControl = 0; draft = null; state = null; baselineMap = null; coordinates = previewWarp = null;
-            selected = -1; compare = false;
+            selected = -1; compare = false; partCoordinates = partPreviewWarps = null; activePart = 0;
             Destroy(before); Destroy(after); before = after = null; error = null;
         }
         public void Dispose() => Reset();

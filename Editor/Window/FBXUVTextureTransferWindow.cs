@@ -7,609 +7,198 @@ using Unity.Profiling;
 
 namespace GokouKotori.FBXUVTextureTransfer.Editor
 {
-    public sealed class FBXUVTextureTransferWindow : EditorWindow
+    // UV Region Editor: adds / removes / renames Regions, switches the active one and writes the picked islands into regionBindings.
+    public sealed class FBXUVTextureTransferWindow : FBXUVLayerWindow<FBXUVTextureTransferLayer>
     {
         private static readonly ProfilerMarker WindowGuiMarker =
             new ProfilerMarker("FBXUVTextureTransfer.EditorWindow.OnGUI");
-        private static readonly ProfilerMarker MeshAnalysisMarker =
-            new ProfilerMarker("FBXUVTextureTransfer.EditorWindow.MeshAnalysis");
 
-        private enum Side
-        {
-            Source,
-            Target
-        }
+        private const string WindowTitle = "FBX UV Texture Transfer";
+        private const string NoRegionMessage = "「Regionを追加」でRegionを追加してから、UV島を選択してください。";
+        private const string MissingBindingMessage = "選択中のregionがLayerにありません。";
+        private static readonly GUIContent OrientationLabel =
+            new GUIContent("向き補正", "転送元画像を転送先の領域へ配置する向きを手動で指定します。");
+        private static readonly GUIContent[] OrientationOptions =
+            Array.ConvertAll(FBXUVTextureTransferLayerEditor.OrientationLabels, label => new GUIContent(label));
 
-        private enum RegionReconcileRequest
-        {
-            None,
-            PreservePendingSelections,
-            ReplacePendingSelections
-        }
-
-        [Serializable]
-        private sealed class ViewState
-        {
-            public Mesh mesh;
-            public int subMeshIndex;
-            public int uvChannel;
-            public Texture2D backgroundTexture;
-            public int selectedIslandId = -1;
-
-            [NonSerialized] public List<FBXUVIsland> islands;
-            [NonSerialized] public Mesh cachedMesh;
-            [NonSerialized] public int cachedSubMeshIndex = -1;
-            [NonSerialized] public int cachedUvChannel = -1;
-            [NonSerialized] public string extractionError;
-            [NonSerialized] public bool hasPendingRegionSelection;
-            [NonSerialized] public FBXUVPreviewViewport viewport = new FBXUVPreviewViewport();
-            [NonSerialized] public Rect previewRect;
-        }
-
-        [SerializeField] private FBXUVTextureTransferLayer layer;
-        [SerializeField] private ViewState sourceView = new ViewState();
-        [SerializeField] private ViewState targetView = new ViewState();
         [SerializeField] private string activeRegionName = string.Empty;
         [SerializeField] private int activeRegionIndex = -1;
-        [SerializeField] private Vector2 scrollPosition;
         [NonSerialized] private SerializedObject serializedLayer;
-        [NonSerialized] private GameObject cachedSourceModelOrPrefab;
-        [NonSerialized] private GameObject cachedTargetModelOrPrefab;
-        [NonSerialized] private Texture2D cachedTargetTexture;
-        [NonSerialized] private RegionReconcileRequest regionReconcileRequest;
-        [NonSerialized] private Vector2 windowScreenOrigin;
+        [NonSerialized] private FBXUVRegionPickerPane sourcePane;
+        [NonSerialized] private FBXUVRegionPickerPane targetPane;
+        [NonSerialized] private int layerDirtyCount = -1;
+        [NonSerialized] private bool regionNameLabelsValid;
+        [NonSerialized] private string[] regionNameLabels;
+        [NonSerialized] private FBXUVEntryListControl regionList;
 
-        private FBXUVMeshAnalysisCache meshAnalysisCache = new FBXUVMeshAnalysisCache();
-        private readonly Vector3[] triangleLinePoints = new Vector3[4];
-        private readonly Vector3[] frameLinePoints = new Vector3[5];
+        // Created lazily: the base analysis cache is not initialized yet while derived fields are.
+        internal FBXUVRegionPickerPane SourcePane => sourcePane ??= new FBXUVRegionPickerPane("転送元：UV", AnalysisCache);
+        internal FBXUVRegionPickerPane TargetPane => targetPane ??= new FBXUVRegionPickerPane("転送先：UV", AnalysisCache);
+        internal FBXUVEntryListControl RegionList =>
+            regionList ??= new FBXUVEntryListControl("Region", "転送元／転送先のUV島の選択も削除されます。");
+        internal int ActiveRegionIndex => activeRegionIndex;
+        internal string ActiveRegionName => activeRegionName;
 
-        private readonly FBXUVMeshCandidateCache candidateCache = new FBXUVMeshCandidateCache();
-        private bool regionNameLabelsValid;
-        private string[] regionNameLabels;
-
-        internal int MeshAnalysisCacheCount => meshAnalysisCache.AnalysisCount;
-        internal SerializedObject CachedSerializedLayer => serializedLayer;
+        protected override GameObject SourceModelOrPrefab => Layer == null ? null : Layer.SourceModelOrPrefab;
+        protected override GameObject TargetModelOrPrefab => Layer == null ? null : Layer.TargetModelOrPrefab;
+        protected override string MissingLayerMessage =>
+            "FBXUVTextureTransferLayer を指定してください。HierarchyでLayerを選択しても開けます。";
 
         [MenuItem("Tools/Gokoukotori/FBX UV Texture Transfer/UV Region Editor")]
         public static void Open()
         {
-            GetWindow<FBXUVTextureTransferWindow>("FBX UV Texture Transfer");
+            GetWindow<FBXUVTextureTransferWindow>(WindowTitle);
         }
 
         public static void Open(FBXUVTextureTransferLayer targetLayer)
         {
-            var window = GetWindow<FBXUVTextureTransferWindow>("FBX UV Texture Transfer");
-            window.layer = targetLayer;
-            window.InitializeFromLayer();
+            var window = GetWindow<FBXUVTextureTransferWindow>(WindowTitle);
+            window.SetLayer(targetLayer);
             window.Show();
             window.Focus();
         }
 
-        private void OnEnable()
+        protected override void OnEnable()
         {
+            base.OnEnable();
             minSize = new Vector2(760f, 620f);
-            sourceView ??= new ViewState();
-            targetView ??= new ViewState();
-            EditorApplication.projectChanged -= OnProjectChanged;
-            EditorApplication.projectChanged += OnProjectChanged;
-            EditorApplication.hierarchyChanged -= OnHierarchyChanged;
-            EditorApplication.hierarchyChanged += OnHierarchyChanged;
-            Undo.undoRedoPerformed -= OnUndoRedoPerformed;
-            Undo.undoRedoPerformed += OnUndoRedoPerformed;
-            InitializeFromLayer();
+            RegisterPanes(SourcePane, TargetPane);
         }
 
-        private void OnDisable()
+        protected override void OnLayerChanged()
         {
-            EditorApplication.projectChanged -= OnProjectChanged;
-            EditorApplication.hierarchyChanged -= OnHierarchyChanged;
-            Undo.undoRedoPerformed -= OnUndoRedoPerformed;
+            serializedLayer = null;
+            layerDirtyCount = -1;
+            regionNameLabelsValid = false;
+            RegionList.ClearNameError();
         }
 
-        private void OnProjectChanged()
+        internal override void OnRefresh(FBXUVRefreshKind kind)
         {
-            InvalidateAllCaches();
-            RequestRegionReconcile(RegionReconcileRequest.PreservePendingSelections);
-            Repaint();
-        }
-
-        private void OnHierarchyChanged()
-        {
-            InvalidateCandidateCaches();
-            Repaint();
-        }
-
-        private void OnUndoRedoPerformed()
-        {
-            InvalidateAllCaches();
-            RequestRegionReconcile(RegionReconcileRequest.ReplacePendingSelections);
-            Repaint();
-        }
-
-        private void OnSelectionChange()
-        {
-            if (Selection.activeGameObject != null)
-            {
-                var selectedLayer = Selection.activeGameObject.GetComponent<FBXUVTextureTransferLayer>();
-                if (selectedLayer != null)
-                {
-                    layer = selectedLayer;
-                    InitializeFromLayer();
-                    Repaint();
-                }
-            }
-        }
-
-        private void OnInspectorUpdate()
-        {
-            var changed = SynchronizeModelOrPrefabReferences();
+            regionNameLabelsValid = false;
             var currentSerializedLayer = GetSerializedLayer();
-            if (currentSerializedLayer != null)
+            if (currentSerializedLayer == null)
             {
-                if (currentSerializedLayer.UpdateIfRequiredOrScript())
-                {
-                    regionNameLabelsValid = false;
-                    RequestRegionReconcile(RegionReconcileRequest.PreservePendingSelections);
-                }
-                var reconcileRequest = ConsumeRegionReconcileRequest();
-                changed |= ReconcileActiveRegion(
-                    currentSerializedLayer,
-                    reconcileRequest != RegionReconcileRequest.None,
-                    reconcileRequest == RegionReconcileRequest.PreservePendingSelections);
+                activeRegionIndex = -1;
+                activeRegionName = string.Empty;
+                SyncPanes(FBXUVRefreshKind.RestoreSaved);
+                return;
             }
 
-            if (changed) Repaint();
+            Reconcile(currentSerializedLayer, kind);
         }
 
-        private void OnGUI()
+        // Edits made outside this window (Debug Inspector, scripts, other windows) mark the layer dirty.
+        // UpdateIfRequiredOrScript() returns true on every call for a MonoBehaviour, so the dirty count decides.
+        // The dirty count also refreshes the Region name labels after renames / reorders, which a comparison of the
+        // saved regions cannot see; in-place region edits still reach the panes on the next GUI event via Sync(saved, None).
+        protected override bool DetectSavedValueChanges()
         {
-            windowScreenOrigin = GUIUtility.GUIToScreenPoint(Vector2.zero);
+            var currentSerializedLayer = GetSerializedLayer();
+            if (currentSerializedLayer == null) return false;
+
+            currentSerializedLayer.UpdateIfRequiredOrScript();
+            var dirtyCount = EditorUtility.GetDirtyCount(Layer);
+            if (dirtyCount == layerDirtyCount) return false;
+
+            layerDirtyCount = dirtyCount;
+            regionNameLabelsValid = false;
+            return true;
+        }
+
+        protected override void DrawContent()
+        {
             using (WindowGuiMarker.Auto())
             {
-                DrawLayerSelection();
-                if (layer == null)
-                {
-                    EditorGUILayout.HelpBox(
-                        "FBXUVTextureTransferLayer を指定してください。HierarchyでLayerを選択しても開けます。",
-                        MessageType.Info);
-                    return;
-                }
-
                 var currentSerializedLayer = GetSerializedLayer();
                 if (currentSerializedLayer == null) return;
-                if (currentSerializedLayer.UpdateIfRequiredOrScript())
+
+                ReconcileActiveRegion(currentSerializedLayer);
+                DrawRegionSelection(currentSerializedLayer);
+                EditorGUILayout.Space(8f);
+                var size = PreviewSize(position.width, 2);
+                var targetTexture = ResolveTargetTexture();
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    regionNameLabelsValid = false;
-                    RequestRegionReconcile(RegionReconcileRequest.PreservePendingSelections);
-                }
-                SynchronizeModelOrPrefabReferences();
-                var reconcileRequest = ConsumeRegionReconcileRequest();
-                ReconcileActiveRegion(
-                    currentSerializedLayer,
-                    reconcileRequest != RegionReconcileRequest.None,
-                    reconcileRequest == RegionReconcileRequest.PreservePendingSelections);
-
-                scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
-                if (DrawRegionSelection(currentSerializedLayer))
-                {
-                    DrawViews(currentSerializedLayer);
-                }
-                EditorGUILayout.EndScrollView();
-            }
-        }
-
-        private void DrawLayerSelection()
-        {
-            EditorGUI.BeginChangeCheck();
-            var next = (FBXUVTextureTransferLayer)EditorGUILayout.ObjectField(
-                "編集中",
-                layer,
-                typeof(FBXUVTextureTransferLayer),
-                true);
-            if (EditorGUI.EndChangeCheck())
-            {
-                layer = next;
-                InitializeFromLayer();
-            }
-        }
-
-        private bool DrawRegionSelection(SerializedObject serializedLayer)
-        {
-            EditorGUILayout.Space(8f);
-            EditorGUILayout.LabelField("UV島の対応付け", EditorStyles.boldLabel);
-            var names = CollectRegionNames(serializedLayer);
-            if (names.Length == 0)
-            {
-                EditorGUILayout.HelpBox(
-                    "Regionがありません。FBXUVTextureTransferLayerコンポーネントのInspectorでRegionを追加してください。",
-                    MessageType.Info);
-                return false;
-            }
-
-            EditorGUI.BeginChangeCheck();
-            var selected = EditorGUILayout.Popup("マッピングするRegion", activeRegionIndex, names);
-            if (EditorGUI.EndChangeCheck())
-            {
-                activeRegionIndex = selected;
-                activeRegionName = GetActiveBinding(serializedLayer)?
-                    .FindPropertyRelative("name")?.stringValue ?? string.Empty;
-                RefreshSelectedIslandIds(serializedLayer);
-            }
-
-            return true;
-        }
-
-        private void DrawViews(SerializedObject serializedLayer)
-        {
-            EditorGUILayout.Space(8f);
-            var availableWidth = Mathf.Max(680f, position.width - 38f);
-            var previewSize = Mathf.Clamp((availableWidth - 16f) * 0.5f, 300f, 640f);
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                DrawView(serializedLayer, Side.Source, sourceView, previewSize);
-                DrawView(serializedLayer, Side.Target, targetView, previewSize);
-            }
-        }
-
-        private void DrawView(SerializedObject serializedLayer, Side side, ViewState state, float width)
-        {
-            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.Width(width)))
-            {
-                EditorGUILayout.LabelField(side == Side.Source ? "転送元UV" : "転送先UV", EditorStyles.boldLabel);
-                DrawMeshSelection(side, state);
-                if (side == Side.Target)
-                {
-                    EditorGUI.BeginChangeCheck();
-                    state.backgroundTexture = (Texture2D)EditorGUILayout.ObjectField(
-                        "背景テクスチャ",
-                        state.backgroundTexture,
-                        typeof(Texture2D),
-                        false);
-                    if (EditorGUI.EndChangeCheck()) Repaint();
-                }
-
-                EnsureIslands(state);
-                var previewRect = GUILayoutUtility.GetRect(width - 16f, width - 16f, GUILayout.ExpandWidth(false));
-                var backgroundTexture = side == Side.Source
-                    ? ObjectReference<Texture2D>(serializedLayer, "defaultSourceTexture")
-                    : state.backgroundTexture;
-                state.viewport ??= new FBXUVPreviewViewport();
-                if (Event.current.type == EventType.Repaint)
-                    state.previewRect = new Rect(GUIUtility.GUIToScreenPoint(previewRect.position)
-                        - windowScreenOrigin, previewRect.size);
-                GUI.BeginGroup(previewRect);
-                var local = new Rect(Vector2.zero, previewRect.size);
-                if (state.viewport.HandleInput(local)) Repaint();
-                var image = state.viewport.ImageRect(local);
-                EditorGUI.DrawRect(local, new Color(0.08f, 0.08f, 0.08f, 1f));
-                DrawUvPreview(image, state, backgroundTexture);
-                HandleUvClick(local, image, serializedLayer, side, state);
-                GUI.EndGroup();
-                if (state.viewport.DrawControls(state.islands?.Find(i => i.Id == state.selectedIslandId))) Repaint();
-                if (!string.IsNullOrEmpty(state.extractionError))
-                {
-                    EditorGUILayout.HelpBox(state.extractionError, MessageType.Error);
-                }
-                else
-                {
-                    EditorGUILayout.LabelField(
-                        $"UV島: {(state.islands?.Count ?? 0)} / 選択: {(state.selectedIslandId < 0 ? "なし" : state.selectedIslandId.ToString())}");
+                    DrawPane(true, size, targetTexture);
+                    GUILayout.Space(16f);
+                    DrawPane(false, size, targetTexture);
                 }
             }
         }
 
-        private void DrawMeshSelection(Side side, ViewState state)
+        internal void SetActiveRegion(int index, string name)
         {
-            if (side == Side.Target)
-            {
-                DrawTargetMeshSelection(state);
-                return;
-            }
-
-            DrawSourceMeshSelection(state);
+            activeRegionIndex = index;
+            activeRegionName = name ?? string.Empty;
         }
 
-        private void DrawSourceMeshSelection(ViewState state)
+        internal SerializedObject GetSerializedLayer()
         {
-            var meshes = CollectSourceMeshes();
-            var meshIndex = meshes.FindIndex(item => item.Mesh == state.mesh);
-            if (meshIndex >= 0)
+            if (Layer == null)
             {
-                EditorGUI.BeginChangeCheck();
-                meshIndex = EditorGUILayout.Popup("メッシュ", meshIndex, candidateCache.Source.Labels);
-                if (EditorGUI.EndChangeCheck())
-                {
-                    ApplyMeshSelection(state, meshes[meshIndex].Mesh, 0);
-                }
-            }
-            else
-            {
-                using (new EditorGUI.DisabledScope(true))
-                {
-                    EditorGUILayout.ObjectField("現在のRegionのメッシュ", state.mesh, typeof(Mesh), false);
-                    EditorGUILayout.IntField("現在のRegionのサブメッシュ", state.subMeshIndex);
-                }
-
-                EditorGUILayout.HelpBox(CreateSourceSelectionWarning(state, meshes.Count), MessageType.Warning);
-                if (meshes.Count > 0)
-                {
-                    var replacementIndex = EditorGUILayout.Popup("転送元メッシュ", 0, candidateCache.Source.ReplacementLabels);
-                    if (replacementIndex > 0)
-                    {
-                        ApplyMeshSelection(state, meshes[replacementIndex - 1].Mesh, 0);
-                    }
-                }
+                serializedLayer = null;
+                return null;
             }
 
-            using (new EditorGUI.DisabledScope(state.mesh == null))
+            if (serializedLayer == null || serializedLayer.targetObject != Layer)
             {
-                var subMeshCount = state.mesh == null ? 1 : Mathf.Max(1, state.mesh.subMeshCount);
-                EditorGUI.BeginChangeCheck();
-                state.subMeshIndex = EditorGUILayout.IntSlider("サブメッシュ", state.subMeshIndex, 0, subMeshCount - 1);
-                state.uvChannel = EditorGUILayout.IntSlider("UVチャンネル", state.uvChannel, 0, 7);
-                if (EditorGUI.EndChangeCheck()) MarkRegionSelectionPending(state);
+                serializedLayer = new SerializedObject(Layer);
             }
+
+            return serializedLayer;
         }
 
-        private void DrawTargetMeshSelection(ViewState state)
+        internal List<FBXUVMeshOption> CollectSourceOptions()
         {
-            var targetTexture = ResolveTargetTexture();
-            var candidates = CollectTargetMeshCandidates(targetTexture);
-            TrySelectOnlyTargetCandidate(state, candidates);
-            var options = CollectTargetMeshOptions(targetTexture);
-            var selectedIndex = options.FindIndex(option =>
-                option.Mesh == state.mesh && option.SubMeshIndex == state.subMeshIndex);
-
-            if (selectedIndex >= 0)
-            {
-                EditorGUI.BeginChangeCheck();
-                selectedIndex = EditorGUILayout.Popup(
-                    "メッシュ / サブメッシュ",
-                    selectedIndex,
-                    candidateCache.Target.Labels);
-                if (EditorGUI.EndChangeCheck())
-                {
-                    ApplyMeshSelection(state, options[selectedIndex].Mesh, options[selectedIndex].SubMeshIndex);
-                }
-            }
-            else
-            {
-                using (new EditorGUI.DisabledScope(true))
-                {
-                    EditorGUILayout.ObjectField("現在のRegionのメッシュ", state.mesh, typeof(Mesh), false);
-                    EditorGUILayout.IntField("現在のRegionのサブメッシュ", state.subMeshIndex);
-                }
-
-                EditorGUILayout.HelpBox(
-                    CreateTargetSelectionWarning(state, targetTexture, options.Count),
-                    MessageType.Warning);
-
-                if (options.Count > 0)
-                {
-                    var replacementIndex = EditorGUILayout.Popup(
-                        "転送先メッシュ / サブメッシュ",
-                        0,
-                        candidateCache.Target.ReplacementLabels);
-                    if (replacementIndex > 0)
-                    {
-                        var replacement = options[replacementIndex - 1];
-                        ApplyMeshSelection(state, replacement.Mesh, replacement.SubMeshIndex);
-                    }
-                }
-            }
-
-            using (new EditorGUI.DisabledScope(state.mesh == null ||
-                       !FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out _, out _, out _)))
-            {
-                EditorGUI.BeginChangeCheck();
-                state.uvChannel = EditorGUILayout.IntSlider("UVチャンネル", state.uvChannel, 0, 7);
-                if (EditorGUI.EndChangeCheck()) MarkRegionSelectionPending(state);
-            }
+            return SourceSnapshot(out _).Options;
         }
 
-        private Texture2D ResolveTargetTexture()
+        internal List<FBXUVMeshOption> CollectTargetOptions()
         {
-            return FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out var canvas, out _, out _)
-                ? canvas.TargetTexture?.SelectTexture
-                : null;
+            return TargetSnapshot(ResolveTargetTexture(), out _).Options;
         }
 
-        private string CreateTargetSelectionWarning(ViewState state, Texture2D targetTexture, int optionCount)
+        // forceRefresh reloads the saved values into both panes and discards pending selections.
+        internal bool ReconcileActiveRegion(SerializedObject serializedLayer, bool forceRefresh = false)
         {
-            if (!FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out _, out var error, out _))
-            {
-                return $"{error} 既存のTarget Region値は保持しています。";
-            }
-
-            if (targetTexture == null)
-            {
-                return "親MultiLayerImageCanvasのTargetTextureを設定してください。既存のTarget Region値は保持しています。";
-            }
-
-            var targetRoot = layer == null ? null : layer.TargetModelOrPrefab;
-            if (!FBXUVModelPrefabReferenceUtility.TryResolveRoot(targetRoot, out _, out var rootError))
-            {
-                return $"転送先 Model / Prefab: {rootError} 既存のTarget Region値は保持しています。";
-            }
-
-            if (optionCount == 0)
-            {
-                return "TargetTextureを参照するMaterialを持つRendererが転送先 Model / Prefab配下にありません。既存のTarget Region値は保持しています。";
-            }
-
-            return state.mesh == null
-                ? "現在のTarget RegionにMesh / Submeshがありません。候補から明示的に選択してください。"
-                : "Target RegionのMesh / Submeshは現在のTargetTextureを参照するRendererで使用されていません。既存値は保持しています。置き換える場合だけ候補から明示的に選択してください。";
+            return Reconcile(serializedLayer, forceRefresh ? FBXUVRefreshKind.RestoreSaved : FBXUVRefreshKind.None);
         }
 
-        private string CreateSourceSelectionWarning(ViewState state, int optionCount)
+        internal void StoreIsland(bool isSource, in FBXUVRegionPick pick)
         {
-            var sourceRoot = layer == null ? null : layer.SourceModelOrPrefab;
-            if (!FBXUVModelPrefabReferenceUtility.TryResolveRoot(sourceRoot, out _, out var rootError))
-            {
-                return $"転送元 Model / Prefab: {rootError} 既存のSource Region値は保持しています。";
-            }
+            if (!isSource && !FBXUVCanvasHierarchyUtility.TryFindCanvas(Layer, out _, out _, out _)) return;
 
-            if (optionCount == 0)
-            {
-                return "転送元 Model / Prefab配下にMeshがありません。既存のSource Region値は保持しています。";
-            }
-
-            return state.mesh == null
-                ? "現在のSource RegionにMeshがありません。候補から明示的に選択してください。"
-                : "Source RegionのMeshは現在の転送元 Model / Prefab配下にありません。既存値は保持しています。置き換える場合だけ候補から明示的に選択してください。";
-        }
-
-        private static void ApplyMeshSelection(ViewState state, Mesh mesh, int subMeshIndex)
-        {
-            state.mesh = mesh;
-            state.subMeshIndex = subMeshIndex;
-            MarkRegionSelectionPending(state);
-        }
-
-        private static bool TrySelectOnlyTargetCandidate(
-            ViewState state,
-            IReadOnlyList<FBXUVTargetMeshCandidate> candidates)
-        {
-            if (candidates.Count != 1 || candidates[0].SubMeshIndices.Count != 1) return false;
-
-            var candidate = candidates[0];
-            var subMeshIndex = candidate.SubMeshIndices[0];
-            if (state.mesh == candidate.Mesh && state.subMeshIndex == subMeshIndex) return false;
-
-            ApplyMeshSelection(state, candidate.Mesh, subMeshIndex);
-            return true;
-        }
-
-        private static void MarkRegionSelectionPending(ViewState state)
-        {
-            state.hasPendingRegionSelection = true;
-            Invalidate(state);
-        }
-
-        private void DrawUvPreview(Rect rect, ViewState state, Texture2D backgroundTexture)
-        {
-            EditorGUI.DrawRect(rect, new Color(0.08f, 0.08f, 0.08f, 1f));
-            if (backgroundTexture != null)
-            {
-                GUI.DrawTexture(rect, backgroundTexture, ScaleMode.StretchToFill, true);
-            }
-
-            if (Event.current.type != EventType.Repaint) return;
-
-            Handles.BeginGUI();
-            if (state.islands != null)
-            {
-                foreach (var island in state.islands)
-                {
-                    var selected = island.Id == state.selectedIslandId;
-                    Handles.color = selected ? new Color(1f, 0.72f, 0.05f, 1f) : new Color(0.1f, 1f, 0.75f, 0.85f);
-                    foreach (var triangle in island.Triangles)
-                    {
-                        triangleLinePoints[0] = UvToGui(rect, triangle.A);
-                        triangleLinePoints[1] = UvToGui(rect, triangle.B);
-                        triangleLinePoints[2] = UvToGui(rect, triangle.C);
-                        triangleLinePoints[3] = triangleLinePoints[0];
-                        Handles.DrawAAPolyLine(selected ? 2.2f : 1.1f, triangleLinePoints);
-                    }
-                }
-            }
-
-            Handles.color = new Color(1f, 1f, 1f, 0.3f);
-            frameLinePoints[0] = new Vector3(rect.x, rect.y);
-            frameLinePoints[1] = new Vector3(rect.xMax, rect.y);
-            frameLinePoints[2] = new Vector3(rect.xMax, rect.yMax);
-            frameLinePoints[3] = new Vector3(rect.x, rect.yMax);
-            frameLinePoints[4] = frameLinePoints[0];
-            Handles.DrawAAPolyLine(1f, frameLinePoints);
-            Handles.EndGUI();
-        }
-
-        private void HandleUvClick(Rect rect, Rect image, SerializedObject serializedLayer, Side side, ViewState state)
-        {
-            var current = Event.current;
-            if (current.type != EventType.MouseDown || current.button != 0 || !rect.Contains(current.mousePosition))
-            {
-                return;
-            }
-
-            if (activeRegionIndex < 0)
-            {
-                ShowNotification(new GUIContent("コンポーネントでRegionを追加し、マッピング対象を選択してください。"));
-                current.Use();
-                return;
-            }
-
-            EnsureIslands(state);
-            if (state.islands == null || state.mesh == null)
-            {
-                current.Use();
-                return;
-            }
-
-            if (!IsMeshSelectionAvailable(side, state))
-            {
-                ShowNotification(new GUIContent("現在のModel / Prefab候補からMeshを選択してください。"));
-                current.Use();
-                return;
-            }
-
-            var uv = FBXUVPreviewViewport.ToUv(image, current.mousePosition);
-            var island = FBXUVIslandExtractor.HitTest(state.islands, uv);
-            if (island == null)
-            {
-                ShowNotification(new GUIContent("この位置にUV島はありません。"));
-                current.Use();
-                return;
-            }
-
-            var binding = GetActiveBinding(serializedLayer);
+            var currentSerializedLayer = GetSerializedLayer();
+            var binding = currentSerializedLayer == null ? null : GetActiveBinding(currentSerializedLayer);
             if (binding == null)
             {
-                ShowNotification(new GUIContent("選択中のregionがLayerにありません。"));
-                current.Use();
+                Notify(MissingBindingMessage);
                 return;
             }
 
-            StoreIsland(serializedLayer, binding, side, state, island);
-            state.selectedIslandId = island.Id;
-            state.extractionError = null;
-            current.Use();
-            Repaint();
-        }
+            var property = binding.FindPropertyRelative(isSource ? "sourceRegion" : "targetRegion");
+            if (property == null) return;
 
-        private void StoreIsland(
-            SerializedObject serializedLayer,
-            SerializedProperty binding,
-            Side side,
-            ViewState state,
-            FBXUVIsland island)
-        {
-            if (side == Side.Target &&
-                !FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out _, out _, out _)) return;
+            var region = FBXUVRegionFactory.Create(pick, AnalysisCache);
+            Undo.RecordObject(currentSerializedLayer.targetObject, "UV島を選択");
+            property.FindPropertyRelative("mesh").objectReferenceValue = region.Mesh;
+            property.FindPropertyRelative("subMeshIndex").intValue = region.SubMeshIndex;
+            property.FindPropertyRelative("uvChannel").intValue = region.UvChannel;
+            property.FindPropertyRelative("islandId").intValue = region.IslandId;
+            property.FindPropertyRelative("meshHash").stringValue = region.MeshHash;
 
-            var region = binding.FindPropertyRelative(side == Side.Source ? "sourceRegion" : "targetRegion");
-            if (region == null) return;
+            var bounds = property.FindPropertyRelative("bounds");
+            bounds.FindPropertyRelative("minU").floatValue = region.Bounds.MinU;
+            bounds.FindPropertyRelative("minV").floatValue = region.Bounds.MinV;
+            bounds.FindPropertyRelative("maxU").floatValue = region.Bounds.MaxU;
+            bounds.FindPropertyRelative("maxV").floatValue = region.Bounds.MaxV;
 
-            Undo.RecordObject(serializedLayer.targetObject, "UV島を選択");
-            region.FindPropertyRelative("mesh").objectReferenceValue = state.mesh;
-            region.FindPropertyRelative("subMeshIndex").intValue = state.subMeshIndex;
-            region.FindPropertyRelative("uvChannel").intValue = state.uvChannel;
-            region.FindPropertyRelative("islandId").intValue = island.Id;
-            region.FindPropertyRelative("meshHash").stringValue =
-                GetMeshHash(state.mesh, state.subMeshIndex, state.uvChannel);
-
-            var bounds = region.FindPropertyRelative("bounds");
-            bounds.FindPropertyRelative("minU").floatValue = island.Bounds.MinU;
-            bounds.FindPropertyRelative("minV").floatValue = island.Bounds.MinV;
-            bounds.FindPropertyRelative("maxU").floatValue = island.Bounds.MaxU;
-            bounds.FindPropertyRelative("maxV").floatValue = island.Bounds.MaxV;
-
-            var triangles = region.FindPropertyRelative("triangles");
-            triangles.arraySize = island.Triangles.Count;
-            for (var index = 0; index < island.Triangles.Count; index++)
+            var triangles = property.FindPropertyRelative("triangles");
+            triangles.arraySize = region.Triangles.Count;
+            for (var index = 0; index < region.Triangles.Count; index++)
             {
-                var source = island.Triangles[index];
+                var source = region.Triangles[index];
                 var destination = triangles.GetArrayElementAtIndex(index);
                 destination.FindPropertyRelative("index").intValue = source.Index;
                 destination.FindPropertyRelative("a").vector2Value = source.A;
@@ -617,159 +206,194 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 destination.FindPropertyRelative("c").vector2Value = source.C;
             }
 
-            serializedLayer.ApplyModifiedProperties();
-            PrefabUtility.RecordPrefabInstancePropertyModifications(serializedLayer.targetObject);
-            EditorUtility.SetDirty(serializedLayer.targetObject);
-            state.hasPendingRegionSelection = false;
+            currentSerializedLayer.ApplyModifiedProperties();
+            PrefabUtility.RecordPrefabInstancePropertyModifications(currentSerializedLayer.targetObject);
+            EditorUtility.SetDirty(currentSerializedLayer.targetObject);
+            (isSource ? SourcePane : TargetPane).MarkSaved(FBXUVSavedRegion.From(region));
+            Repaint();
         }
 
-        private void EnsureIslands(ViewState state)
+        private void DrawRegionSelection(SerializedObject serializedLayer)
         {
-            if (state.mesh == state.cachedMesh &&
-                state.subMeshIndex == state.cachedSubMeshIndex &&
-                state.uvChannel == state.cachedUvChannel &&
-                (state.islands != null || !string.IsNullOrEmpty(state.extractionError)))
+            EditorGUILayout.Space(8f);
+            EditorGUILayout.LabelField("UV島の対応付け", EditorStyles.boldLabel);
+            var selected = activeRegionIndex;
+            var command = RegionList.DrawSelector(CollectRegionNames(serializedLayer), ref selected);
+            if (command != FBXUVEntryCommand.None)
             {
-                return;
+                if (command == FBXUVEntryCommand.Select) SelectRegion(serializedLayer, selected);
+                else if (command == FBXUVEntryCommand.Add) AddRegion();
+                else if (command == FBXUVEntryCommand.Remove) RemoveRegion(activeRegionIndex);
+                else MoveRegion(activeRegionIndex, activeRegionIndex + (command == FBXUVEntryCommand.MoveUp ? -1 : 1));
+                // The panes' controls were laid out for the previous Region.
+                GUIUtility.ExitGUI();
             }
 
-            state.cachedMesh = state.mesh;
-            state.cachedSubMeshIndex = state.subMeshIndex;
-            state.cachedUvChannel = state.uvChannel;
-            state.islands = null;
-            state.extractionError = null;
-            state.selectedIslandId = -1;
-            if (state.mesh == null) return;
+            var binding = GetActiveBinding(serializedLayer);
+            if (binding == null) return;
 
-            using (MeshAnalysisMarker.Auto())
+            RegionList.DrawEnabledAndName(binding, activeRegionIndex, RenameRegion);
+            var orientation = binding.FindPropertyRelative("orientation");
+            EditorGUI.BeginChangeCheck();
+            var orientationIndex = EditorGUILayout.Popup(
+                OrientationLabel,
+                FBXUVTextureTransferLayerEditor.OrientationPopupIndex(orientation.intValue),
+                OrientationOptions);
+            if (EditorGUI.EndChangeCheck())
             {
-                try
-                {
-                    state.islands = meshAnalysisCache.Get(state.mesh, state.subMeshIndex, state.uvChannel).GetIslands();
-                }
-                catch (Exception exception)
-                {
-                    state.extractionError = exception.Message;
-                }
+                orientation.intValue = (int)FBXUVTextureTransferLayerEditor.OrientationValues[orientationIndex];
             }
+
+            FBXUVRegionBindingSerializedPropertyUtility.ApplyModifiedProperties(serializedLayer);
         }
 
-        private string GetMeshHash(Mesh mesh, int subMeshIndex, int uvChannel)
+        private void SelectRegion(SerializedObject serializedLayer, int index)
         {
-            using (MeshAnalysisMarker.Auto())
-            {
-                return meshAnalysisCache.Get(mesh, subMeshIndex, uvChannel).GetContentHash();
-            }
+            activeRegionIndex = index;
+            activeRegionName = GetActiveBinding(serializedLayer)?
+                .FindPropertyRelative("name")?.stringValue ?? string.Empty;
+            SyncPanes(FBXUVRefreshKind.RestoreSaved);
         }
 
-        private static void Invalidate(ViewState state)
+        // Adds a Region with a unique name and makes it the active one. Returns its index, or -1 without a layer.
+        internal int AddRegion()
         {
-            state.cachedMesh = null;
-            state.cachedSubMeshIndex = -1;
-            state.cachedUvChannel = -1;
-            state.islands = null;
-            state.extractionError = null;
-            state.selectedIslandId = -1;
-        }
-
-        private void InitializeFromLayer()
-        {
-            serializedLayer = null;
-            InvalidateAllCaches();
-            if (layer == null)
-            {
-                cachedSourceModelOrPrefab = null;
-                cachedTargetModelOrPrefab = null;
-                cachedTargetTexture = null;
-                activeRegionName = string.Empty;
-                activeRegionIndex = -1;
-                targetView.backgroundTexture = null;
-                ClearMeshSelection(sourceView);
-                ClearMeshSelection(targetView);
-                return;
-            }
-
-            cachedSourceModelOrPrefab = null;
-            cachedTargetModelOrPrefab = null;
-            cachedTargetTexture = null;
-            SynchronizeModelOrPrefabReferences();
             var currentSerializedLayer = GetSerializedLayer();
-            currentSerializedLayer.UpdateIfRequiredOrScript();
+            if (currentSerializedLayer == null) return -1;
 
-            targetView.backgroundTexture = ResolveTargetTexture();
+            currentSerializedLayer.Update();
+            var index = FBXUVRegionBindingSerializedPropertyUtility.Add(
+                FBXUVRegionBindingSerializedPropertyUtility.FindBindings(currentSerializedLayer));
+            if (index < 0) return -1;
 
-            ReconcileActiveRegion(currentSerializedLayer, true);
-            regionReconcileRequest = RegionReconcileRequest.None;
+            ApplyRegionListChange(currentSerializedLayer, "Regionを追加");
+            SelectRegion(currentSerializedLayer, index);
+            return index;
         }
 
-        private bool SynchronizeModelOrPrefabReferences()
+        // Removes a Region without asking (the list control confirms first) and selects the one that takes its place.
+        internal bool RemoveRegion(int index)
         {
-            var sourceRoot = layer == null ? null : layer.SourceModelOrPrefab;
-            var targetRoot = layer == null ? null : layer.TargetModelOrPrefab;
-            var targetTexture = ResolveTargetTexture();
-            var changed = cachedSourceModelOrPrefab != sourceRoot ||
-                          cachedTargetModelOrPrefab != targetRoot ||
-                          cachedTargetTexture != targetTexture;
-            if (!changed) return false;
+            var currentSerializedLayer = GetSerializedLayer();
+            if (currentSerializedLayer == null) return false;
 
-            cachedSourceModelOrPrefab = sourceRoot;
-            cachedTargetModelOrPrefab = targetRoot;
-            cachedTargetTexture = targetTexture;
-            InvalidateAllCaches();
-            RequestRegionReconcile(RegionReconcileRequest.PreservePendingSelections);
+            currentSerializedLayer.Update();
+            var bindings = FBXUVRegionBindingSerializedPropertyUtility.FindBindings(currentSerializedLayer);
+            if (!FBXUVRegionBindingSerializedPropertyUtility.DeleteAt(bindings, index)) return false;
+
+            ApplyRegionListChange(currentSerializedLayer, "Regionを削除");
+            SelectRegion(currentSerializedLayer, Mathf.Min(index, bindings.arraySize - 1));
+            return true;
+        }
+
+        // Moves a Region in the composition order (top first). The moved Region stays active and keeps the pending picks.
+        internal bool MoveRegion(int index, int newIndex)
+        {
+            var currentSerializedLayer = GetSerializedLayer();
+            if (currentSerializedLayer == null) return false;
+
+            currentSerializedLayer.Update();
+            var bindings = FBXUVRegionBindingSerializedPropertyUtility.FindBindings(currentSerializedLayer);
+            if (!FBXUVRegionBindingSerializedPropertyUtility.Move(bindings, index, newIndex)) return false;
+
+            ApplyRegionListChange(currentSerializedLayer, "Regionの順番を変更");
+            if (index == activeRegionIndex) activeRegionIndex = newIndex;
+            return true;
+        }
+
+        internal bool RenameRegion(int index, string requestedName, out string error)
+        {
+            var currentSerializedLayer = GetSerializedLayer();
+            if (currentSerializedLayer == null)
+            {
+                error = MissingBindingMessage;
+                return false;
+            }
+
+            // No Update(): renames arrive mid-draw, and the same pass may hold an unapplied enabled / orientation edit.
+            var bindings = FBXUVRegionBindingSerializedPropertyUtility.FindBindings(currentSerializedLayer);
+            if (!FBXUVRegionBindingSerializedPropertyUtility.TryRename(bindings, index, requestedName, out error)) return false;
+
+            ApplyRegionListChange(currentSerializedLayer, "Region名を変更");
+            // The active Region is reconciled by name.
+            if (index == activeRegionIndex)
+            {
+                activeRegionName = bindings.GetArrayElementAtIndex(index).FindPropertyRelative("name").stringValue;
+            }
 
             return true;
         }
 
-        private SerializedObject GetSerializedLayer()
+        private void ApplyRegionListChange(SerializedObject currentSerializedLayer, string undoLabel)
         {
-            if (layer == null)
-            {
-                serializedLayer = null;
-                return null;
-            }
-
-            if (serializedLayer == null || serializedLayer.targetObject != layer)
-            {
-                if (serializedLayer != null) InvalidateAllCaches();
-                serializedLayer = new SerializedObject(layer);
-                RequestRegionReconcile(RegionReconcileRequest.ReplacePendingSelections);
-            }
-
-            return serializedLayer;
-        }
-
-        private void InvalidateAllCaches()
-        {
-            meshAnalysisCache = new FBXUVMeshAnalysisCache();
-            InvalidateCandidateCaches();
-            Invalidate(sourceView);
-            Invalidate(targetView);
-        }
-
-        private void InvalidateCandidateCaches()
-        {
-            candidateCache.Invalidate();
+            FBXUVRegionBindingSerializedPropertyUtility.ApplyModifiedProperties(currentSerializedLayer);
+            Undo.SetCurrentGroupName(undoLabel);
             regionNameLabelsValid = false;
-            regionNameLabels = null;
+            RegionList.ClearNameError();
+            Repaint();
         }
 
-        private void RequestRegionReconcile(RegionReconcileRequest request)
+        private void DrawPane(bool isSource, float size, Texture targetTexture)
         {
-            if (request > regionReconcileRequest) regionReconcileRequest = request;
+            var pane = isSource ? SourcePane : TargetPane;
+            string error;
+            var candidates = isSource ? SourceSnapshot(out error) : TargetSnapshot(targetTexture, out error);
+            pane.Sync(SavedRegion(isSource), FBXUVRefreshKind.None);
+            pane.TrySelectOnlyCandidate(candidates);
+            var context = CreatePaneContext(
+                candidates,
+                error,
+                !isSource,
+                () => isSource
+                    ? FBXUVCandidateMessages.Source(SourceModelOrPrefab, candidates.Options.Count, pane.Mesh != null)
+                    : FBXUVCandidateMessages.Target(Layer, targetTexture, candidates.Options.Count, pane.Mesh != null),
+                isSource ? Layer.DefaultSourceTexture : targetTexture,
+                size);
+            context.HandleInput = HandleClickWithoutRegion;
+
+            var pick = pane.Draw(context);
+            if (!pick.HasValue) return;
+
+            if (activeRegionIndex < 0)
+            {
+                Notify(NoRegionMessage);
+                return;
+            }
+
+            StoreIsland(isSource, pick.Value);
         }
 
-        private RegionReconcileRequest ConsumeRegionReconcileRequest()
+        private bool HandleClickWithoutRegion(Rect local, Rect image)
         {
-            var request = regionReconcileRequest;
-            regionReconcileRequest = RegionReconcileRequest.None;
-            return request;
+            if (activeRegionIndex >= 0) return false;
+
+            var current = Event.current;
+            if (current.type != EventType.MouseDown || current.button != 0 || !local.Contains(current.mousePosition))
+            {
+                return false;
+            }
+
+            Notify(NoRegionMessage);
+            current.Use();
+            return true;
         }
 
-        private bool ReconcileActiveRegion(
-            SerializedObject serializedLayer,
-            bool forceRefresh = false,
-            bool preservePendingSelections = false)
+        private FBXUVMeshCandidateCache.Snapshot SourceSnapshot(out string error)
+        {
+            return CandidateCache.GetSource(SourceModelOrPrefab, FBXUVCandidateGrouping.ByMesh, out error);
+        }
+
+        private FBXUVMeshCandidateCache.Snapshot TargetSnapshot(Texture targetTexture, out string error)
+        {
+            return CandidateCache.GetTarget(
+                Layer,
+                TargetModelOrPrefab,
+                targetTexture,
+                FBXUVCandidateGrouping.ByMesh,
+                out error);
+        }
+
+        private bool Reconcile(SerializedObject serializedLayer, FBXUVRefreshKind kind)
         {
             var bindings = serializedLayer.FindProperty("regionBindings");
             if (bindings == null || !bindings.isArray || bindings.arraySize == 0)
@@ -777,11 +401,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 var changed = activeRegionIndex != -1 || !string.IsNullOrEmpty(activeRegionName);
                 activeRegionIndex = -1;
                 activeRegionName = string.Empty;
-                if (changed || forceRefresh)
-                {
-                    ClearMeshSelection(sourceView);
-                    ClearMeshSelection(targetView);
-                }
+                if (changed) SyncPanes(FBXUVRefreshKind.RestoreSaved);
+                else if (kind != FBXUVRefreshKind.None) SyncPanes(kind);
 
                 return changed;
             }
@@ -816,14 +437,34 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             activeRegionName = reconciledName;
             if (selectionChanged)
             {
-                RefreshSelectedIslandIds(serializedLayer);
+                SyncPanes(FBXUVRefreshKind.RestoreSaved);
             }
-            else if (forceRefresh)
+            else if (kind != FBXUVRefreshKind.None)
             {
-                RefreshSelectedIslandIds(serializedLayer, preservePendingSelections);
+                SyncPanes(kind);
             }
 
             return selectionChanged;
+        }
+
+        private void SyncPanes(FBXUVRefreshKind kind)
+        {
+            SourcePane.Sync(SavedRegion(true), kind);
+            TargetPane.Sync(SavedRegion(false), kind);
+        }
+
+        private FBXUVSavedRegion SavedRegion(bool isSource)
+        {
+            var bindings = Layer == null ? null : Layer.RegionBindings;
+            if (bindings == null || activeRegionIndex < 0 || activeRegionIndex >= bindings.Count)
+            {
+                return FBXUVSavedRegion.Empty;
+            }
+
+            var binding = bindings[activeRegionIndex];
+            if (binding == null) return FBXUVSavedRegion.Empty;
+
+            return FBXUVSavedRegion.From(isSource ? binding.SourceRegion : binding.TargetRegion);
         }
 
         private SerializedProperty GetActiveBinding(SerializedObject serializedLayer)
@@ -833,94 +474,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                    activeRegionIndex >= 0 && activeRegionIndex < bindings.arraySize
                 ? bindings.GetArrayElementAtIndex(activeRegionIndex)
                 : null;
-        }
-
-        private void RefreshSelectedIslandIds(
-            SerializedObject serializedLayer,
-            bool preservePendingSelections = false)
-        {
-            LoadViewFromRegion(
-                serializedLayer,
-                sourceView,
-                Side.Source,
-                true,
-                preservePendingSelections);
-            LoadViewFromRegion(
-                serializedLayer,
-                targetView,
-                Side.Target,
-                true,
-                preservePendingSelections);
-        }
-
-        private void LoadViewFromRegion(
-            SerializedObject serializedLayer,
-            ViewState state,
-            Side side,
-            bool clearWhenMissing,
-            bool preservePendingSelection = false)
-        {
-            if (preservePendingSelection && state.hasPendingRegionSelection) return;
-
-            var binding = GetActiveBinding(serializedLayer);
-            var region = binding?.FindPropertyRelative(side == Side.Source ? "sourceRegion" : "targetRegion");
-            if (region == null)
-            {
-                if (clearWhenMissing) ClearMeshSelection(state);
-                return;
-            }
-
-            var mesh = region.FindPropertyRelative("mesh").objectReferenceValue as Mesh;
-            if (mesh == null)
-            {
-                if (clearWhenMissing) ClearMeshSelection(state);
-                return;
-            }
-
-            state.mesh = mesh;
-            state.subMeshIndex = region.FindPropertyRelative("subMeshIndex").intValue;
-            state.uvChannel = region.FindPropertyRelative("uvChannel").intValue;
-            state.hasPendingRegionSelection = false;
-            Invalidate(state);
-            EnsureIslands(state);
-            if (!IsMeshHashCurrent(region, mesh, state.subMeshIndex, state.uvChannel))
-            {
-                state.selectedIslandId = -1;
-                state.extractionError = "Mesh内容hashが一致しません。このregionのUV島を再選択してください。";
-                return;
-            }
-
-            state.selectedIslandId = region.FindPropertyRelative("islandId").intValue;
-        }
-
-        private bool IsMeshHashCurrent(
-            SerializedProperty region,
-            Mesh mesh,
-            int subMeshIndex,
-            int uvChannel)
-        {
-            var storedHash = region.FindPropertyRelative("meshHash").stringValue;
-            if (string.IsNullOrEmpty(storedHash)) return false;
-            try
-            {
-                return string.Equals(
-                    storedHash,
-                    GetMeshHash(mesh, subMeshIndex, uvChannel),
-                    StringComparison.Ordinal);
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-
-        private static void ClearMeshSelection(ViewState state)
-        {
-            state.mesh = null;
-            state.subMeshIndex = 0;
-            state.uvChannel = 0;
-            state.hasPendingRegionSelection = false;
-            Invalidate(state);
         }
 
         private string[] CollectRegionNames(SerializedObject serializedLayer)
@@ -945,64 +498,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
             regionNameLabelsValid = true;
             return regionNameLabels;
-        }
-
-        private List<FBXUVMeshOption> CollectSourceMeshes()
-        {
-            return candidateCache.GetSource(layer == null ? null : layer.SourceModelOrPrefab, out _).Options;
-        }
-
-        private List<FBXUVTargetMeshCandidate> CollectTargetMeshCandidates(Texture targetTexture)
-        {
-            return GetTargetCandidates(targetTexture).TargetCandidates;
-        }
-
-        private List<FBXUVMeshOption> CollectTargetMeshOptions(Texture targetTexture)
-        {
-            return GetTargetCandidates(targetTexture).Options;
-        }
-
-        private FBXUVMeshCandidateCache.Snapshot GetTargetCandidates(Texture targetTexture)
-        {
-            return candidateCache.GetTarget(layer, layer == null ? null : layer.TargetModelOrPrefab, targetTexture, out _);
-        }
-
-        private bool IsMeshSelectionAvailable(Side side, ViewState state)
-        {
-            if (side == Side.Source)
-            {
-                foreach (var item in CollectSourceMeshes())
-                {
-                    if (item.Mesh == state.mesh) return true;
-                }
-
-                return false;
-            }
-
-            foreach (var candidate in CollectTargetMeshCandidates(ResolveTargetTexture()))
-            {
-                if (candidate.Mesh != state.mesh) continue;
-                foreach (var subMeshIndex in candidate.SubMeshIndices)
-                {
-                    if (subMeshIndex == state.subMeshIndex) return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static Vector3 UvToGui(Rect rect, Vector2 uv)
-        {
-            return new Vector3(
-                Mathf.LerpUnclamped(rect.x, rect.xMax, uv.x),
-                Mathf.LerpUnclamped(rect.yMax, rect.y, uv.y),
-                0f);
-        }
-
-        private static T ObjectReference<T>(SerializedObject serializedObject, string propertyName)
-            where T : UnityEngine.Object
-        {
-            return serializedObject.FindProperty(propertyName)?.objectReferenceValue as T;
         }
 
         private static bool NamesEqual(string first, string second)

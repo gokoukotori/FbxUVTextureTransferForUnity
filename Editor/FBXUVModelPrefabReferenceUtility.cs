@@ -221,7 +221,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             return false;
         }
 
-        private static string HierarchyPath(Transform root, Transform target)
+        internal static string HierarchyPath(Transform root, Transform target)
         {
             if (target == root) return target.name;
             var names = new Stack<string>();

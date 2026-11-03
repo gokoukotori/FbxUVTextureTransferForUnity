@@ -53,7 +53,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 {
                     var rendererLabel = item.Renderer is SkinnedMeshRenderer ? "Skinned" : "MeshFilter";
                     candidate = new MutableCandidate(
-                        $"{HierarchyPath(root.transform, item.Renderer.transform)} ({rendererLabel})", item.Mesh);
+                        $"{FBXUVModelPrefabReferenceUtility.HierarchyPath(root.transform, item.Renderer.transform)} ({rendererLabel})", item.Mesh);
                     candidateByMesh.Add(item.Mesh, candidate);
                     candidates.Add(candidate);
                 }
@@ -115,22 +115,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
             materialMatches.Add(material, matches);
             return matches;
-        }
-
-        private static string HierarchyPath(Transform root, Transform target)
-        {
-            if (target == root) return target.name;
-
-            var names = new Stack<string>();
-            var current = target;
-            while (current != null)
-            {
-                names.Push(current.name);
-                if (current == root) break;
-                current = current.parent;
-            }
-
-            return string.Join("/", names);
         }
 
         private sealed class MutableCandidate

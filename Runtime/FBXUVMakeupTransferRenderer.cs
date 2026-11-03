@@ -8,7 +8,7 @@ namespace GokouKotori.FBXUVTextureTransfer
 {
     public static class FBXUVMakeupTransferRenderer
     {
-        public static void Render(FBXUVMakeupTransferLayer layer, RenderTexture destination)
+        internal static void Render(FBXUVMakeupTransferLayer layer, RenderTexture destination)
         {
             if (layer == null) throw new ArgumentNullException(nameof(layer));
             Render(layer, destination, layer.GetMapping());
@@ -148,7 +148,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             {
                 if (source == null || source.Count == 0) throw new ArgumentException("転送元の顔三角形がありません。");
                 var records = new List<Vector4>();
-                var cells = new List<int>[GridSize * GridSize];
+                var grid = new FBXUVTriangleGrid(GridSize);
                 foreach (var triangle in source)
                 {
                     if (triangle == null || !FBXUVMakeupWarp.IsUnitUv(triangle.a)
@@ -172,22 +172,10 @@ namespace GokouKotori.FBXUVTextureTransfer
                     var maxX = Cell(Mathf.Max(triangle.a.x, Mathf.Max(triangle.b.x, triangle.c.x)) + 2e-6f);
                     var minY = Cell(Mathf.Min(triangle.a.y, Mathf.Min(triangle.b.y, triangle.c.y)) - 2e-6f);
                     var maxY = Cell(Mathf.Max(triangle.a.y, Mathf.Max(triangle.b.y, triangle.c.y)) + 2e-6f);
-                    for (var y = minY; y <= maxY; y++)
-                        for (var x = minX; x <= maxX; x++)
-                        {
-                            var cell = y * GridSize + x;
-                            if (cells[cell] == null) cells[cell] = new List<int>();
-                            cells[cell].Add(index);
-                        }
+                    grid.Add(index, minX, maxX, minY, maxY);
                 }
                 if (records.Count == 0) throw new ArgumentException("転送元の顔三角形が全て退化しています。");
-                var ranges = new Vector2Int[cells.Length];
-                var indices = new List<int>();
-                for (var i = 0; i < cells.Length; i++)
-                {
-                    ranges[i] = new Vector2Int(indices.Count, cells[i]?.Count ?? 0);
-                    if (cells[i] != null) indices.AddRange(cells[i]);
-                }
+                grid.Build(out var ranges, out var indices);
                 var mask = new SourceTriangleMask();
                 try
                 {
@@ -195,7 +183,7 @@ namespace GokouKotori.FBXUVTextureTransfer
                     mask.triangles.SetData(records);
                     mask.cellRanges = new ComputeBuffer(ranges.Length, sizeof(int) * 2);
                     mask.cellRanges.SetData(ranges);
-                    mask.cellIndices = new ComputeBuffer(indices.Count, sizeof(int));
+                    mask.cellIndices = new ComputeBuffer(indices.Length, sizeof(int));
                     mask.cellIndices.SetData(indices);
                     return mask;
                 }

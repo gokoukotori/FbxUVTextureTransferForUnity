@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Point = GokouKotori.FBXUVTextureTransfer.FBXUVTriangleIntersection.Point;
 
 namespace GokouKotori.FBXUVTextureTransfer
 {
@@ -8,13 +9,6 @@ namespace GokouKotori.FBXUVTextureTransfer
     // fails rather than silently moving controls or accepting overlapping images.
     public sealed class FBXUVMakeupExactMap
     {
-        private struct Point
-        {
-            internal double x, y;
-            internal Point(double x, double y) { this.x = x; this.y = y; }
-            internal Point(Vector2 p) { x = p.x; y = p.y; }
-            internal Vector2 Vector => new Vector2((float)x, (float)y);
-        }
         private struct Triangle
         {
             internal int a, b, c;
@@ -148,20 +142,8 @@ namespace GokouKotori.FBXUVTextureTransfer
         }
         private double IntersectionArea(Triangle a, Triangle b)
         {
-            var polygon=new List<Point>{source[a.a],source[a.b],source[a.c]};var direction=Math.Sign(Area(source,b));
-            for(var edge=0;edge<3&&polygon.Count>=3;edge++)
-            {
-                var u=source[b[edge]];var v=source[b[(edge+1)%3]];var output=new List<Point>();
-                for(var i=0;i<polygon.Count;i++)
-                {
-                    var p=polygon[i];var q=polygon[(i+1)%polygon.Count];var sp=Cross(u,v,p)*direction;var sq=Cross(u,v,q)*direction;
-                    if(sp>=0)output.Add(p);
-                    if((sp>=0)!=(sq>=0)){var f=sp/(sp-sq);output.Add(new Point(p.x+(q.x-p.x)*f,p.y+(q.y-p.y)*f));}
-                }
-                polygon=output;
-            }
-            double area=0;for(var i=1;i+1<polygon.Count;i++)area+=Cross(polygon[0],polygon[i],polygon[i+1]);
-            return Math.Abs(area)*.5;
+            return FBXUVTriangleIntersection.Area(source[a.a], source[a.b], source[a.c],
+                source[b.a], source[b.b], source[b.c]);
         }
         public bool TryEvaluate(Vector2 uv, out Vector2 mapped)
         {
@@ -231,7 +213,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             {
                 try
                 {
-                    var records=new List<Vector4>();var cells=new List<int>[32*32];
+                    var records=new List<Vector4>();var grid=new FBXUVTriangleGrid(32);
                     foreach(var t in map.triangles)
                     {
                         var a=map.target[t.a].Vector;var b=map.target[t.b].Vector;var c=map.target[t.c].Vector;
@@ -239,14 +221,12 @@ namespace GokouKotori.FBXUVTextureTransfer
                         var id=records.Count/3;
                         records.Add(new Vector4(a.x,a.y,b.x,b.y));records.Add(new Vector4(c.x,c.y,s.x,s.y));records.Add(new Vector4(u.x,u.y,v.x,v.y));
                         var min=Vector2.Min(a,Vector2.Min(b,c));var max=Vector2.Max(a,Vector2.Max(b,c));
-                        for(var y=Cell(min.y-1e-6f);y<=Cell(max.y+1e-6f);y++)for(var x=Cell(min.x-1e-6f);x<=Cell(max.x+1e-6f);x++)
-                        {var cell=y*32+x;if(cells[cell]==null)cells[cell]=new List<int>();cells[cell].Add(id);}
+                        grid.Add(id,Cell(min.x-1e-6f),Cell(max.x+1e-6f),Cell(min.y-1e-6f),Cell(max.y+1e-6f));
                     }
-                    var spans=new Vector2Int[cells.Length];var ids=new List<int>();
-                    for(var i=0;i<cells.Length;i++){spans[i]=new Vector2Int(ids.Count,cells[i]?.Count??0);if(cells[i]!=null)ids.AddRange(cells[i]);}
+                    grid.Build(out var spans,out var ids);
                     data=new ComputeBuffer(records.Count,16);data.SetData(records);
                     ranges=new ComputeBuffer(spans.Length,8);ranges.SetData(spans);
-                    indices=new ComputeBuffer(ids.Count,4);indices.SetData(ids);
+                    indices=new ComputeBuffer(ids.Length,4);indices.SetData(ids);
                     var prefix = mouth ? "_Mouth" : "_Exact";
                     material.SetInt(mouth ? "_UseMouthMapping" : "_UseExactMapping",1);
                     material.SetBuffer(prefix+"Triangles",data);material.SetBuffer(prefix+"Ranges",ranges);material.SetBuffer(prefix+"Indices",indices);
