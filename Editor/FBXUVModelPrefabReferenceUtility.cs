@@ -62,6 +62,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             return TryPopulateTargetRoot(layer, layer == null ? null : layer.targetModelOrPrefab, out changed, out error);
         }
 
+        internal static bool TryPopulateTargetRoot(
+            FBXUVBodyOverlayTransferLayer layer,
+            out bool changed,
+            out string error)
+        {
+            return TryPopulateTargetRoot(layer, layer == null ? null : layer.targetModelOrPrefab, out changed, out error);
+        }
+
         private static bool TryPopulateTargetRoot(
             Component layer,
             GameObject currentTarget,

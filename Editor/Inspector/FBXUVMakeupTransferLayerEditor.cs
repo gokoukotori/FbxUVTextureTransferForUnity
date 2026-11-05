@@ -38,12 +38,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             serializedObject.UpdateIfRequiredOrScript();
             EditorGUILayout.LabelField("メイク転送（β版）", EditorStyles.boldLabel);
-            DrawModel("sourceModelOrPrefab", "転送元 Model / Prefab");
-            DrawModel("targetModelOrPrefab", "転送先 Model / Prefab");
-            if (serializedObject.FindProperty("targetModelOrPrefab").objectReferenceValue != null)
-                targetAutoResolutionError = string.Empty;
-            if (!string.IsNullOrEmpty(targetAutoResolutionError))
-                EditorGUILayout.HelpBox($"転送先を自動決定できません: {targetAutoResolutionError}", MessageType.Warning);
+            FBXUVLayerInspectorGUI.DrawModelFields(serializedObject, ref targetAutoResolutionError);
             EditorGUILayout.PropertyField(serializedObject.FindProperty("makeupTexture"), new GUIContent("メイクの透過PNG"));
             EditorGUILayout.PropertyField(serializedObject.FindProperty("sourceReferenceTexture"), new GUIContent("元の顔画像（編集時の背景・任意）"));
             EditorGUILayout.PropertyField(serializedObject.FindProperty("warpSmoothing"), new GUIContent("変形の安定化係数", "同じ三角形補間の対応位置を正則化します。0は正則化なし。値を上げると対応点からのずれを許容します。口境界の自動補正は係数によらず有効です。"));
@@ -53,12 +48,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             EditorGUILayout.LabelField("対応点", (layer.landmarks == null ? 0 : layer.landmarks.Count).ToString());
             if (GUILayout.Button("メイク転送エディターを開く")) FBXUVMakeupTransferWindow.Open(layer);
             DrawWarpInspection(layer);
-            if (FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out var canvas, out var error, out _))
-            {
-                using (new EditorGUI.DisabledScope(true))
-                    EditorGUILayout.ObjectField("Canvasの対象テクスチャ", canvas.TargetTexture?.SelectTexture, typeof(Texture2D), false);
-            }
-            else EditorGUILayout.HelpBox(error, MessageType.Error);
+            FBXUVLayerInspectorGUI.DrawCanvasTarget(layer);
             foreach (var issue in FBXUVMakeupTransferValidation.ValidateLayer(layer))
                 EditorGUILayout.HelpBox(issue.Message, MessageType.Error);
         }
@@ -89,14 +79,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             EditorGUILayout.HelpBox("形状や色の自然さはアバター表示でも確認してください。", MessageType.None);
             if (!string.IsNullOrEmpty(inspectionMessage))
                 EditorGUILayout.HelpBox(inspectionMessage, inspectionMessageType);
-        }
-
-        private void DrawModel(string propertyName, string label)
-        {
-            var property = serializedObject.FindProperty(propertyName);
-            property.objectReferenceValue = EditorGUILayout.ObjectField(label, property.objectReferenceValue, typeof(GameObject), false);
-            if (!FBXUVModelPrefabReferenceUtility.TryResolveRoot(property.objectReferenceValue as GameObject, out _, out var error))
-                EditorGUILayout.HelpBox(error, MessageType.Error);
         }
     }
 }

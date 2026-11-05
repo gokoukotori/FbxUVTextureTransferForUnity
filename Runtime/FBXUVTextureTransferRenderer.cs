@@ -331,7 +331,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             return GetTemporary(descriptor, name, FilterMode.Bilinear);
         }
 
-        private static RenderTexture GetSeedTemporary(int width, int height, string name)
+        internal static RenderTexture GetSeedTemporary(int width, int height, string name)
         {
             var descriptor = new RenderTextureDescriptor(width, height, RenderTextureFormat.ARGBFloat, 0)
             {
@@ -346,7 +346,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             return GetTemporary(descriptor, name, FilterMode.Point);
         }
 
-        private static RenderTexture GetMaskTemporary(int width, int height, string name)
+        internal static RenderTexture GetMaskTemporary(int width, int height, string name)
         {
             var descriptor = new RenderTextureDescriptor(width, height, RenderTextureFormat.ARGB32, 0)
             {

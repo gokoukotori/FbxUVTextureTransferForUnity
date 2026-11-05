@@ -35,7 +35,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private void OnEnable()
         {
-            TryPopulateTargetModelOrPrefab();
+            FBXUVModelPrefabReferenceUtility.TryPopulateTargetRoot(
+                (FBXUVTextureTransferLayer)target, out _, out targetAutoResolutionError);
         }
 
         public override void OnInspectorGUI()
@@ -43,23 +44,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             using (InspectorGuiMarker.Auto())
             {
                 serializedObject.UpdateIfRequiredOrScript();
-                DrawModelPrefabReference(
-                    serializedObject.FindProperty("sourceModelOrPrefab"),
-                    new GUIContent("転送元 Model / Prefab"));
-                var targetModelOrPrefab = serializedObject.FindProperty("targetModelOrPrefab");
-                DrawModelPrefabReference(
-                    targetModelOrPrefab,
-                    new GUIContent("転送先 Model / Prefab"));
-                if (targetModelOrPrefab.objectReferenceValue != null)
-                {
-                    targetAutoResolutionError = string.Empty;
-                }
-                if (!string.IsNullOrEmpty(targetAutoResolutionError))
-                {
-                    EditorGUILayout.HelpBox(
-                        $"転送先を自動決定できません: {targetAutoResolutionError}",
-                        MessageType.Warning);
-                }
+                FBXUVLayerInspectorGUI.DrawModelFields(serializedObject, ref targetAutoResolutionError);
                 EditorGUILayout.PropertyField(
                     serializedObject.FindProperty("defaultSourceTexture"),
                     new GUIContent("転送元テクスチャ"));
@@ -74,7 +59,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                     FBXUVTextureTransferWindow.Open((FBXUVTextureTransferLayer)target);
                 }
 
-                DrawCanvasTarget((FBXUVTextureTransferLayer)target);
+                FBXUVLayerInspectorGUI.DrawCanvasTarget((FBXUVTextureTransferLayer)target);
                 DrawResourceState();
                 DrawEnvironmentNotice();
                 DrawValidation((FBXUVTextureTransferLayer)target);
@@ -83,67 +68,10 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
         }
 
-        private static void DrawModelPrefabReference(
-            SerializedProperty property,
-            GUIContent label)
-        {
-            EditorGUI.BeginChangeCheck();
-            var selected = EditorGUILayout.ObjectField(
-                label,
-                property.objectReferenceValue,
-                typeof(GameObject),
-                false) as GameObject;
-            if (EditorGUI.EndChangeCheck()) property.objectReferenceValue = selected;
-
-            string error;
-            var root = property.objectReferenceValue as GameObject;
-            if (!FBXUVModelPrefabReferenceUtility.TryResolveRoot(root, out _, out error))
-            {
-                EditorGUILayout.HelpBox(error, MessageType.Error);
-            }
-        }
-
-        private void TryPopulateTargetModelOrPrefab()
-        {
-            var transferLayer = target as FBXUVTextureTransferLayer;
-            if (FBXUVModelPrefabReferenceUtility.TryPopulateTargetRoot(
-                    transferLayer,
-                    out _,
-                    out var error))
-            {
-                targetAutoResolutionError = string.Empty;
-                return;
-            }
-
-            targetAutoResolutionError = error;
-        }
-
         internal static int OrientationPopupIndex(int serializedValue)
         {
             var index = Array.IndexOf(OrientationValues, (FBXUVTransferOrientation)serializedValue);
             return index >= 0 ? index : 0;
-        }
-
-        private void DrawCanvasTarget(FBXUVTextureTransferLayer transferLayer)
-        {
-            EditorGUILayout.Space(6f);
-            if (!FBXUVCanvasHierarchyUtility.TryFindCanvas(transferLayer, out var canvas, out var error, out _))
-            {
-                EditorGUILayout.HelpBox(error, MessageType.Error);
-                return;
-            }
-
-            using (new EditorGUI.DisabledScope(true))
-            {
-                EditorGUILayout.ObjectField(
-                    "Canvasの対象テクスチャ",
-                    canvas.TargetTexture?.SelectTexture,
-                    typeof(Texture2D),
-                    false);
-            }
-            EditorGUILayout.HelpBox(
-                "適用先は親MultiLayerImageCanvasのTargetTextureだけです。targetごとにMLICとLayerを1対1で配置してください。",
-                MessageType.Info);
         }
 
         private void DrawResourceState()

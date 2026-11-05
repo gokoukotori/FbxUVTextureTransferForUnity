@@ -81,35 +81,21 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                 ValidateEnvironment(issues, layer);
             }
 
-            GameObject avatarRoot = null;
-            if (!FBXUVAvatarRootResolver.TryResolve(layer, out avatarRoot, out var avatarRootError))
-            {
-                Add(issues, avatarRootError, layer);
-            }
-
-            ValidateExternalTool(layer, issues);
-            var canvas = ValidateHierarchy(layer, issues);
-            Texture targetTexture = null;
-            if (canvas != null && (canvas.TargetTexture == null || canvas.TargetTexture.SelectTexture == null))
-            {
-                Add(issues, "親 MultiLayerImageCanvas の TargetTexture が未設定です。", canvas);
-            }
-            else if (canvas != null)
-            {
-                targetTexture = canvas.TargetTexture.SelectTexture;
-            }
+            var placement = FBXUVLayerValidation.ValidatePlacement(layer, "FBX UV Texture Transfer Layer", issues);
+            var avatarRoot = placement.AvatarRoot;
+            var targetTexture = placement.TargetTexture;
 
             var serializedLayer = new SerializedObject(layer);
             var sourceModelOrPrefabReference = ObjectReference<GameObject>(serializedLayer, "sourceModelOrPrefab");
             var targetModelOrPrefabReference = ObjectReference<GameObject>(serializedLayer, "targetModelOrPrefab");
-            var isSourceRootValid = TryResolveModelOrPrefabRoot(
+            var isSourceRootValid = FBXUVLayerValidation.TryResolveModelRoot(
                 sourceModelOrPrefabReference,
                 "Source",
                 buildAvatarRoot,
                 layer,
                 issues,
                 out var sourceModelOrPrefab);
-            var isTargetRootValid = TryResolveModelOrPrefabRoot(
+            var isTargetRootValid = FBXUVLayerValidation.TryResolveModelRoot(
                 targetModelOrPrefabReference,
                 "Target",
                 buildAvatarRoot,
@@ -231,28 +217,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             return issues;
         }
 
-        private static bool TryResolveModelOrPrefabRoot(
-            GameObject reference,
-            string label,
-            GameObject buildAvatarRoot,
-            Object contextObject,
-            ICollection<FBXUVTransferValidationIssue> issues,
-            out GameObject root)
-        {
-            root = null;
-            if (reference == null)
-            {
-                Add(issues, $"{label} Model/Prefab が未設定です。コンポーネントでProject内のModelまたはPrefabのメインルートを指定してください。", contextObject);
-                return false;
-            }
-
-            if (FBXUVModelPrefabReferenceUtility.TryResolveRootForBuild(
-                reference, buildAvatarRoot, out root, out var error)) return true;
-
-            Add(issues, $"{label} Model/Prefab が無効です: {error}", reference);
-            return false;
-        }
-
         internal static void ValidateEnvironment(List<FBXUVTransferValidationIssue> issues, Object contextObject)
         {
             if (!TexTransToolCompatibility.TryGetStatus(out var status, out var failure))
@@ -292,37 +256,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             {
                 Add(issues, "TexTransTool の backend が WGPU です。このLayerは Unity backendだけをサポートします。", contextObject);
             }
-        }
-
-        private static void ValidateExternalTool(
-            FBXUVTextureTransferLayer layer,
-            ICollection<FBXUVTransferValidationIssue> issues)
-        {
-            var wrappers = layer.GetComponents<ExternalToolAsLayer>();
-            if (wrappers.Length != 1)
-            {
-                Add(issues, "同じ GameObject に ExternalToolAsLayer がちょうど1つ必要です。", layer);
-            }
-
-            var implementations = layer.GetComponents<MonoBehaviour>()
-                .Where(component => component is IExternalToolCanBehaveAsLayer)
-                .ToArray();
-            if (implementations.Length != 1 || !ReferenceEquals(implementations[0], layer))
-            {
-                Add(issues, "同じ GameObject の ExternalTool実装は FBXUVTextureTransferLayer 1つだけにしてください。", layer);
-            }
-        }
-
-        private static MultiLayerImageCanvas ValidateHierarchy(
-            FBXUVTextureTransferLayer layer,
-            ICollection<FBXUVTransferValidationIssue> issues)
-        {
-            if (!FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out var canvas, out var error, out var context))
-            {
-                Add(issues, error, context);
-                return null;
-            }
-            return canvas;
         }
 
         private static void ValidateRegion(

@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.2.0-beta.7] - 2026-11-05
+
+### Added
+
+- ボディテクスチャ転送コンポーネント追加
+
+### Changed
+
+- 通常・メイク・アイ転送の NDMF プラグインを共通の基底クラスに統一。環境の検証はどのレイヤーでもビルドごとに1回だけ行う。
+- 3つのレイヤーの検証で共通する項目（アバタールート、ExternalToolAsLayer、親 MLIC と TargetTexture、Model / Prefab）を共通化し、エラー文を統一。
+- 3つのレイヤーの Inspector の Model / Prefab 欄と `Canvasの対象テクスチャ` の表示を統一。アイ転送でも、転送先 Model / Prefab を自動決定できない理由を表示。
+
 ## [0.2.0-beta.6] - 2026-11-03
 
 ### Added

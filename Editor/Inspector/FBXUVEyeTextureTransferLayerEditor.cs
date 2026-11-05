@@ -9,12 +9,15 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
     {
         private string message;
         private string inspectionState;
-        private void OnEnable() => FBXUVModelPrefabReferenceUtility.TryPopulateTargetRoot((FBXUVEyeTextureTransferLayer)target, out _, out _);
+        private string targetAutoResolutionError;
+        private void OnEnable() => FBXUVModelPrefabReferenceUtility.TryPopulateTargetRoot((FBXUVEyeTextureTransferLayer)target, out _, out targetAutoResolutionError);
         public override void OnInspectorGUI()
         {
             serializedObject.UpdateIfRequiredOrScript();
             EditorGUILayout.LabelField("アイテクスチャ転送（β版）", EditorStyles.boldLabel);
-            DrawConfiguration(serializedObject);
+            FBXUVLayerInspectorGUI.DrawModelFields(serializedObject, ref targetAutoResolutionError);
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("sourceTexture"), new GUIContent("転送元テクスチャ", "虹彩と瞳孔に使用します。"));
+            FBXUVLayerInspectorGUI.DrawCanvasTarget((FBXUVEyeTextureTransferLayer)target);
             if (serializedObject.ApplyModifiedProperties()) message = null;
             var layer = (FBXUVEyeTextureTransferLayer)target;
             if (inspectionState != EditorJsonUtility.ToJson(layer)) message = null;
@@ -28,28 +31,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 inspectionState = EditorJsonUtility.ToJson(layer);
             }
             if (!string.IsNullOrEmpty(message)) EditorGUILayout.HelpBox(message, MessageType.Info);
-        }
-
-        private static void DrawConfiguration(SerializedObject serialized)
-        {
-            Model(serialized, "sourceModelOrPrefab", "転送元 Model / Prefab");
-            Model(serialized, "targetModelOrPrefab", "転送先 Model / Prefab");
-            EditorGUILayout.PropertyField(serialized.FindProperty("sourceTexture"), new GUIContent("転送元テクスチャ", "虹彩と瞳孔に使用します。"));
-            var layer = serialized.targetObject as FBXUVEyeTextureTransferLayer;
-            if (FBXUVCanvasHierarchyUtility.TryFindCanvas(layer, out var canvas, out var error, out _))
-            {
-                using (new EditorGUI.DisabledScope(true))
-                    EditorGUILayout.ObjectField("Canvasの対象テクスチャ", canvas.TargetTexture?.SelectTexture, typeof(Texture), false);
-            }
-            else EditorGUILayout.HelpBox(error, MessageType.Warning);
-        }
-
-        private static void Model(SerializedObject serialized, string property, string label)
-        {
-            var value = serialized.FindProperty(property);
-            value.objectReferenceValue = EditorGUILayout.ObjectField(label, value.objectReferenceValue, typeof(GameObject), false);
-            if (value.objectReferenceValue != null && !FBXUVModelPrefabReferenceUtility.TryResolveRoot(value.objectReferenceValue as GameObject, out _, out var error))
-                EditorGUILayout.HelpBox(error, MessageType.Error);
         }
     }
 }

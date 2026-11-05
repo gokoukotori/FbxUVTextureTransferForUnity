@@ -83,7 +83,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             internal Vector4[] GpuPoints { get; private set; }
             private FBXUVMakeupMapping mapping;
             private FBXUVTriangle[] sourceTriangles, targetTriangles;
-            private SourceTriangleMask sourceMask;
+            private FBXUVSourceTriangleMask sourceMask;
             private IDisposable exactBuffers, mouthBuffers;
 
             internal RenderResources(FBXUVMakeupTransferLayer layer, FBXUVMakeupMapping mapping,
@@ -100,7 +100,9 @@ namespace GokouKotori.FBXUVTextureTransfer
                         if (mapping.Mouth != null) mouthBuffers = mapping.Mouth.Bind(Material, true);
                     }
                     else Material.SetInt("_UseExactMapping", 0);
-                    sourceMask = SourceTriangleMask.Create(layer.sourceRegion.triangles);
+                    sourceMask = FBXUVSourceTriangleMask.Create(layer.sourceRegion.triangles, 32,
+                        "転送元の顔三角形がありません。", "転送元の顔三角形には0〜1の有限UVが必要です。",
+                        "転送元の顔三角形が全て退化しています。");
                     sourceMask.Bind(Material);
                     Mesh = CreateTargetMesh(layer.targetRegion.triangles);
                     GpuPoints = mapping.Warp.GetGpuPoints();
@@ -131,80 +133,6 @@ namespace GokouKotori.FBXUVTextureTransfer
                 if (Material != null) UnityEngine.Object.DestroyImmediate(Material);
                 Mesh = null; Material = null; GpuPoints = null;
                 mapping = null; sourceTriangles = targetTriangles = null;
-            }
-        }
-
-        // A small uniform grid limits the GPU containment test to nearby source triangles.
-        // Both the mapped UV and each bilinear source texel use the same triangle test;
-        // a raster mask alone cannot distinguish sub-texel points across a UV boundary.
-        private sealed class SourceTriangleMask : IDisposable
-        {
-            private const int GridSize = 32;
-            private ComputeBuffer triangles;
-            private ComputeBuffer cellRanges;
-            private ComputeBuffer cellIndices;
-
-            internal static SourceTriangleMask Create(IReadOnlyList<FBXUVTriangle> source)
-            {
-                if (source == null || source.Count == 0) throw new ArgumentException("転送元の顔三角形がありません。");
-                var records = new List<Vector4>();
-                var grid = new FBXUVTriangleGrid(GridSize);
-                foreach (var triangle in source)
-                {
-                    if (triangle == null || !FBXUVMakeupWarp.IsUnitUv(triangle.a)
-                        || !FBXUVMakeupWarp.IsUnitUv(triangle.b) || !FBXUVMakeupWarp.IsUnitUv(triangle.c))
-                        throw new ArgumentException("転送元の顔三角形には0〜1の有限UVが必要です。");
-                    var abX = (double)triangle.b.x - triangle.a.x;
-                    var abY = (double)triangle.b.y - triangle.a.y;
-                    var acX = (double)triangle.c.x - triangle.a.x;
-                    var acY = (double)triangle.c.y - triangle.a.y;
-                    var bcX = (double)triangle.c.x - triangle.b.x;
-                    var bcY = (double)triangle.c.y - triangle.b.y;
-                    var maxEdgeSquared = Math.Max(abX * abX + abY * abY,
-                        Math.Max(acX * acX + acY * acY, bcX * bcX + bcY * bcY));
-                    if (Math.Abs(abX * acY - abY * acX) <= maxEdgeSquared * 1e-12) continue;
-                    var index = records.Count / 2;
-                    records.Add(new Vector4(triangle.a.x, triangle.a.y, triangle.b.x, triangle.b.y));
-                    records.Add(new Vector4(triangle.c.x, triangle.c.y, 0, 0));
-                    // Match the barycentric tolerance used on shared edges by the shader.
-                    // Expanding the bins avoids dropping a candidate at a grid-cell boundary.
-                    var minX = Cell(Mathf.Min(triangle.a.x, Mathf.Min(triangle.b.x, triangle.c.x)) - 2e-6f);
-                    var maxX = Cell(Mathf.Max(triangle.a.x, Mathf.Max(triangle.b.x, triangle.c.x)) + 2e-6f);
-                    var minY = Cell(Mathf.Min(triangle.a.y, Mathf.Min(triangle.b.y, triangle.c.y)) - 2e-6f);
-                    var maxY = Cell(Mathf.Max(triangle.a.y, Mathf.Max(triangle.b.y, triangle.c.y)) + 2e-6f);
-                    grid.Add(index, minX, maxX, minY, maxY);
-                }
-                if (records.Count == 0) throw new ArgumentException("転送元の顔三角形が全て退化しています。");
-                grid.Build(out var ranges, out var indices);
-                var mask = new SourceTriangleMask();
-                try
-                {
-                    mask.triangles = new ComputeBuffer(records.Count, sizeof(float) * 4);
-                    mask.triangles.SetData(records);
-                    mask.cellRanges = new ComputeBuffer(ranges.Length, sizeof(int) * 2);
-                    mask.cellRanges.SetData(ranges);
-                    mask.cellIndices = new ComputeBuffer(indices.Length, sizeof(int));
-                    mask.cellIndices.SetData(indices);
-                    return mask;
-                }
-                catch { mask.Dispose(); throw; }
-            }
-
-            internal void Bind(Material material)
-            {
-                material.SetInt("_SourceGridSize", GridSize);
-                material.SetBuffer("_SourceTriangles", triangles);
-                material.SetBuffer("_SourceCellRanges", cellRanges);
-                material.SetBuffer("_SourceCellIndices", cellIndices);
-            }
-
-            private static int Cell(float value) => Mathf.Clamp(Mathf.FloorToInt(value * GridSize), 0, GridSize - 1);
-
-            public void Dispose()
-            {
-                cellIndices?.Release(); cellIndices = null;
-                cellRanges?.Release(); cellRanges = null;
-                triangles?.Release(); triangles = null;
             }
         }
 

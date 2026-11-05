@@ -76,24 +76,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         internal static List<FBXUVTargetRendererCandidate> CollectRenderers(GameObject root, Texture targetTexture)
         {
             var result = new List<FBXUVTargetRendererCandidate>();
-            if (root == null || targetTexture == null) return result;
-
-            var materialMatches = new Dictionary<Material, bool>();
-            foreach (var item in FBXUVRendererMeshUtility.Collect(root))
-            {
-                if (item.Mesh.subMeshCount <= 0) continue;
-                var subMeshIndices = new HashSet<int>();
-                var materials = item.Renderer.sharedMaterials;
-                for (var materialIndex = 0; materialIndex < materials.Length; materialIndex++)
-                {
-                    if (UsesTexture(materials[materialIndex], targetTexture, materialMatches))
-                        subMeshIndices.Add(Mathf.Min(materialIndex, item.Mesh.subMeshCount - 1));
-                }
-                if (subMeshIndices.Count == 0) continue;
-                var sorted = new List<int>(subMeshIndices);
-                sorted.Sort();
-                result.Add(new FBXUVTargetRendererCandidate(item.Renderer, item.Mesh, new ReadOnlyCollection<int>(sorted)));
-            }
+            foreach (var item in FBXUVTextureUsage.Collect(root, targetTexture))
+                result.Add(new FBXUVTargetRendererCandidate(item.Renderer, item.Mesh, item.SubMeshIndices));
             return result;
         }
 
@@ -102,19 +86,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             Texture targetTexture,
             IDictionary<Material, bool> materialMatches)
         {
-            if (material == null) return false;
-            if (materialMatches.TryGetValue(material, out var matches)) return matches;
-
-            matches = false;
-            foreach (var propertyId in material.GetTexturePropertyNameIDs())
-            {
-                if (material.GetTexture(propertyId) != targetTexture) continue;
-                matches = true;
-                break;
-            }
-
-            materialMatches.Add(material, matches);
-            return matches;
+            return FBXUVTextureUsage.UsesTexture(material, targetTexture, materialMatches);
         }
 
         private sealed class MutableCandidate

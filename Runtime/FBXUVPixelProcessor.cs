@@ -106,7 +106,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             shader.Dispatch(kernel, (width + ThreadGroupSize - 1) / ThreadGroupSize, (height + ThreadGroupSize - 1) / ThreadGroupSize, 1);
         }
 
-        private static int HighestJump(int width, int height)
+        internal static int HighestJump(int width, int height)
         {
             var maximum = Mathf.Max(width, height);
             var jump = 1;
