@@ -1,0 +1,123 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace GokouKotori.FBXUVTextureTransfer
+{
+    [AddComponentMenu("Gokoukotori/FBX UV Texture Transfer/FBX UV Makeup Transfer Layer (β版)")]
+    [DisallowMultipleComponent]
+    public sealed class FBXUVMakeupTransferLayer : FBXUVTransferLayerBase
+    {
+        public Texture2D makeupTexture;
+        public Texture2D sourceReferenceTexture;
+        public FBXUVTransferRegion sourceRegion = new FBXUVTransferRegion();
+        public FBXUVTransferRegion targetRegion = new FBXUVTransferRegion();
+        public List<FBXUVMakeupLandmark> landmarks = new List<FBXUVMakeupLandmark>();
+        [Range(0f, .1f)] public float warpSmoothing;
+
+        private protected override string LoadImageFailureMessage => "メイク転送に失敗しました。透明レイヤーを返します。";
+        private protected override string LoadImageFallbackFailureMessage => "メイク転送の透明fallback生成に失敗しました。";
+
+        [NonSerialized] private FBXUVMakeupComputationCache computationCache;
+        [NonSerialized] private FBXUVLiveMeshAnalysis sourceAnalysis, targetAnalysis;
+        [NonSerialized] private HashSet<int> validatedTriangleIndices;
+        [NonSerialized] private FBXUVMakeupTransferRenderer.RenderResources renderResources;
+        internal FBXUVMakeupComputationCache ComputationCache =>
+            computationCache ?? (computationCache = new FBXUVMakeupComputationCache());
+        internal FBXUVMakeupMapping GetMapping() => ComputationCache.GetMapping(this);
+
+        public Shader ResolveTransferShader()
+        {
+            return Resources.Load<Shader>("FBXUVTextureTransfer/MakeupTransfer");
+        }
+
+        public bool CanRender(out string reason)
+        {
+            return CanRender(out reason, out _);
+        }
+
+        private bool CanRender(out string reason, out FBXUVMakeupMapping mapping)
+        {
+            mapping = null;
+            if (makeupTexture == null) return Fail("メイクの透過PNGが未設定です。", out reason);
+            var shader = ResolveTransferShader();
+            if (shader == null || !shader.isSupported) return Fail("メイク転送Shaderを利用できません。", out reason);
+            try
+            {
+                if (sourceAnalysis == null) sourceAnalysis = new FBXUVLiveMeshAnalysis();
+                if (targetAnalysis == null) targetAnalysis = new FBXUVLiveMeshAnalysis();
+                if (!IsRegionReady(sourceRegion, sourceAnalysis) || !IsRegionReady(targetRegion, targetAnalysis))
+                    return Fail("顔Regionの選択・UV・Mesh hashが無効です。顔領域を再選択してください。", out reason);
+            }
+            catch (Exception)
+            {
+                return Fail("顔MeshのUV・三角形を読み取れません。顔領域を再選択してください。", out reason);
+            }
+            try { mapping = GetMapping(); }
+            catch (Exception exception) { return Fail("基本変形を生成できません。" + exception.Message, out reason); }
+            reason = string.Empty;
+            return true;
+        }
+
+        public bool TryCreateWarp(out FBXUVMakeupWarp warp, out string reason)
+        {
+            return FBXUVMakeupWarp.TryCreate(landmarks, warpSmoothing, out warp, out reason);
+        }
+
+        private protected override void RenderPrepared(RenderTexture destination)
+        {
+            if (!CanRender(out _, out var mapping)) return;
+            FBXUVMakeupTransferRenderer.Render(this, destination, mapping);
+        }
+
+        private bool IsRegionReady(FBXUVTransferRegion region, FBXUVLiveMeshAnalysis cache)
+        {
+            if (region == null || !region.bounds.IsValid || region.triangles == null || region.triangles.Count == 0
+                || !FBXUVMakeupWarp.IsUnitUv(new Vector2(region.bounds.minU, region.bounds.minV))
+                || !FBXUVMakeupWarp.IsUnitUv(new Vector2(region.bounds.maxU, region.bounds.maxV))
+                || region.mesh == null || string.IsNullOrEmpty(region.meshHash)) return false;
+            var analysis = cache.Get(region);
+            if (!string.Equals(region.meshHash, analysis.GetContentHash(), StringComparison.Ordinal)) return false;
+            var hasArea = false;
+            var meshTriangles = analysis.GetTriangles();
+            var seen = validatedTriangleIndices ?? (validatedTriangleIndices = new HashSet<int>());
+            seen.Clear();
+            foreach (var triangle in region.triangles)
+            {
+                if (triangle == null || triangle.index < 0 || triangle.index >= meshTriangles.Count || !seen.Add(triangle.index)) return false;
+                var original = meshTriangles[triangle.index];
+                for (var i = 0; i < 3; i++)
+                    if (!FBXUVMakeupWarp.IsUnitUv(triangle.GetPoint(i)) || !region.bounds.Contains(triangle.GetPoint(i))
+                        || (triangle.GetPoint(i) - original.GetPoint(i)).sqrMagnitude > 1e-12f) return false;
+                var ab = triangle.b - triangle.a;
+                var ac = triangle.c - triangle.a;
+                if (Math.Abs(ab.x * (double)ac.y - ab.y * (double)ac.x) > 1e-12) hasArea = true;
+            }
+            return hasArea;
+        }
+
+        private static bool Fail(string message, out string reason) { reason = message; return false; }
+        internal FBXUVMakeupTransferRenderer.RenderResources GetRenderResources(FBXUVMakeupMapping mapping, Shader shader)
+        {
+            if (renderResources == null || !renderResources.Matches(this, mapping, shader))
+            {
+                ReleaseRenderResources();
+                renderResources = new FBXUVMakeupTransferRenderer.RenderResources(this, mapping, shader);
+            }
+            return renderResources;
+        }
+
+        internal void ReleaseRenderResources()
+        {
+            renderResources?.Dispose();
+            renderResources = null;
+        }
+
+        private void OnDisable() { ReleaseRenderResources(); }
+        private void OnDestroy() { ReleaseRenderResources(); }
+        private protected override void NormalizeSerializedFields()
+        {
+            if (landmarks == null) landmarks = new List<FBXUVMakeupLandmark>();
+        }
+    }
+}
