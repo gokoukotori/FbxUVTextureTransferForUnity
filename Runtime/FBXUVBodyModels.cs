@@ -16,6 +16,15 @@ namespace GokouKotori.FBXUVTextureTransfer
         public bool fixedPoint;
     }
 
+    public enum FBXUVBodyNippleShapeMode { Auto, None, Named }
+
+    [Serializable]
+    public sealed class FBXUVBodyNippleShapeSelection
+    {
+        public FBXUVBodyNippleShapeMode mode = FBXUVBodyNippleShapeMode.Auto;
+        public string shapeName = "";
+    }
+
     [Serializable]
     public sealed class FBXUVBodyManualSettings
     {

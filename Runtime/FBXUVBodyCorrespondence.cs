@@ -77,21 +77,27 @@ namespace GokouKotori.FBXUVTextureTransfer
         internal FBXUVBodyDiagnostics Diagnostics;
         // Never null: what the nipple landmarks did while this map was built.
         internal FBXUVBodyLandmarkResult Landmarks;
+        // 2026-11-06 region spec §4.4: the four discs the region texels were copied with; null when the map was not copied
+        // region to region. FBXUVBodyPinWarp reads it so that pins act on the same mapping (§4.5).
+        internal FBXUVBodyRegionMapping RegionTransfer;
         // The shared map carries the pins of whichever layer applied last. SourceUv/Valid equal Base* outside
         // AppliedPinRect, so the next layer restores only that rectangle (FBXUVBodyPinWarp).
         internal string AppliedPinSignature;
         internal RectInt AppliedPinRect;
 
-        // Skeleton alignment → nipple landmarks (when alignNipples) → surface refinement → map. Whenever the landmarks
-        // are not used, the refinement gets the skeleton-aligned shape and no anchors, exactly as with alignNipples off.
+        // Skeleton alignment → nipple landmarks (when alignNipples: shift, then the areola scale) → surface refinement →
+        // map → region-to-region copy of the areola regions (2026-11-06 region spec §5.2, only when it applies). Whenever the
+        // landmarks are not used, the refinement gets the skeleton-aligned shape and no anchors, exactly as with alignNipples off.
         internal static FBXUVBodyCorrespondence Build(FBXUVBodyGeometry source, FBXUVBodyGeometry target, int resolution, bool alignNipples = true)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             if (target == null) throw new ArgumentNullException(nameof(target));
             var aligned = FBXUVBodySkeletonAlignment.Align(source, target);
             var landmarks = new FBXUVBodyLandmarkResult { Enabled = alignNipples };
-            FBXUVBodyNipples sourceNipples = null, targetNipples = null;
+            FBXUVBodyLandmarkChoice sourceChoice = null, targetChoice = null;
             var moves = new Vector3[2];
+            var scales = new[] { float.NaN, float.NaN };
+            var coreRadii = new float[2];
             Vector3[] refined = null;
             if (!alignNipples)
             {
@@ -99,12 +105,20 @@ namespace GokouKotori.FBXUVTextureTransfer
             }
             else
             {
-                sourceNipples = FBXUVBodyLandmarks.Detect(source);
-                targetNipples = FBXUVBodyLandmarks.Detect(target);
-                landmarks.Reason = NippleReason(sourceNipples, true) ?? NippleReason(targetNipples, false);
+                sourceChoice = FBXUVBodyLandmarks.Choose(source);
+                targetChoice = FBXUVBodyLandmarks.Choose(target);
+                landmarks.SourceKind = sourceChoice.Kind;
+                landmarks.TargetKind = targetChoice.Kind;
+                landmarks.SourceShape = sourceChoice.ShapeName;
+                landmarks.TargetShape = targetChoice.ShapeName;
+                landmarks.SourceShapeAuto = source.NippleShapeAuto;
+                landmarks.TargetShapeAuto = target.NippleShapeAuto;
+                landmarks.SourceShapeReason = FBXUVBodyLandmarks.ShapeReason(true, source.NippleShapeIssue ?? sourceChoice.ShapeReason);
+                landmarks.TargetShapeReason = FBXUVBodyLandmarks.ShapeReason(false, target.NippleShapeIssue ?? targetChoice.ShapeReason);
+                landmarks.Reason = NippleReason(sourceChoice.Nipples, true) ?? NippleReason(targetChoice.Nipples, false);
                 if (landmarks.Reason == null)
                 {
-                    refined = RefineOnNipples(source, target, aligned, sourceNipples, targetNipples, moves, out var reason);
+                    refined = RefineOnNipples(source, target, aligned, sourceChoice, targetChoice, landmarks, moves, scales, coreRadii, out var reason);
                     landmarks.Reason = reason;
                     landmarks.Used = refined != null;
                 }
@@ -113,13 +127,95 @@ namespace GokouKotori.FBXUVTextureTransfer
             if (refined == null) refined = FBXUVBodySurfaceRefine.Refine(source, aligned, target);
             var map = BuildCore(source, target, resolution, refined);
             map.Landmarks = landmarks;
-            if (sourceNipples != null && sourceNipples.Found && targetNipples.Found)
+            // 2026-11-06 region spec §5: only with both usable regions (the condition for the diagnostics line); otherwise
+            // the map and the result stay exactly as before.
+            var regionTexels = new int[2];
+            if (sourceChoice?.Region != null && targetChoice?.Region != null)
             {
-                landmarks.Left = LandmarkSide(map, sourceNipples.Left, targetNipples.Left, moves[0]);
-                landmarks.Right = LandmarkSide(map, sourceNipples.Right, targetNipples.Right, moves[1]);
+                landmarks.RegionTransferReason = TransferRegions(map, sourceChoice, targetChoice, landmarks, regionTexels);
+                landmarks.RegionTransferUsed = landmarks.RegionTransferReason == null;
+                // map.Diagnostics (FoundRate) is from BuildCore, before this pass; the pass never clears Valid, so it can only under-report.
+            }
+
+            if (sourceChoice != null && sourceChoice.Nipples.Found && targetChoice.Nipples.Found)
+            {
+                landmarks.Left = LandmarkSide(map, sourceChoice, targetChoice, true, moves[0], scales[0], landmarks.ScaleUsed ? coreRadii[0] : float.NaN);
+                landmarks.Right = LandmarkSide(map, sourceChoice, targetChoice, false, moves[1], scales[1], landmarks.ScaleUsed ? coreRadii[1] : float.NaN);
+                landmarks.Left.RegionTexels = regionTexels[0];
+                landmarks.Right.RegionTexels = regionTexels[1];
             }
 
             return map;
+        }
+
+        // 2026-11-06 region spec §5.1–5.4. When the landmarks were used, the size passed and all four regions (source left,
+        // source right, target left, target right) make a disc, rewrites every texel on a target region triangle with the
+        // region-to-region copy (Base* and their copies), keeps the discs in map.RegionTransfer, counts the rewritten texels
+        // per side into regionTexels ([0] left, [1] right) and returns null. Otherwise returns why not and leaves the map as it is.
+        private static string TransferRegions(FBXUVBodyCorrespondence map, FBXUVBodyLandmarkChoice sourceChoice, FBXUVBodyLandmarkChoice targetChoice,
+            FBXUVBodyLandmarkResult landmarks, int[] regionTexels)
+        {
+            if (landmarks.Reason == FBXUVBodyLandmarks.NotNeededReason) return FBXUVBodyLandmarks.RegionNotNeededReason;
+            if (!landmarks.Used) return FBXUVBodyLandmarks.RegionNotUsedReason;
+            if (!landmarks.ScaleUsed) return FBXUVBodyLandmarks.RegionNoScaleReason;
+
+            // Source before target, left before right; the first disc that cannot be built names the reason.
+            var discs = new FBXUVBodyRegionDisc[4];
+            var sides = new[] { (true, true), (true, false), (false, true), (false, false) };
+            var sourceWeld = FBXUVBodyWeld.Groups(map.Source, out _);
+            var targetWeld = FBXUVBodyWeld.Groups(map.Target, out _);
+            for (var k = 0; k < sides.Length; k++)
+            {
+                var (isSource, left) = sides[k];
+                var geometry = isSource ? map.Source : map.Target;
+                var choice = isSource ? sourceChoice : targetChoice;
+                var region = left ? choice.Region.Left : choice.Region.Right;
+                var centre = CentreVertex(geometry, isSource ? sourceWeld : targetWeld, region, left ? choice.Nipples.Left : choice.Nipples.Right);
+                if (!FBXUVBodyRegionDisc.TryBuild(geometry, region, centre, out discs[k], out var detail))
+                    return FBXUVBodyLandmarks.RegionDiscReason(isSource, left, detail);
+            }
+
+            var transfer = new FBXUVBodyRegionMapping(discs[0], discs[1], discs[2], discs[3]);
+            map.RegionTransfer = transfer;
+            // Each texel writes only its own entries, so the result does not depend on the order (deterministic).
+            // side: 0 = not rewritten, 1 = left, 2 = right.
+            var side = new byte[map.Texels.Length];
+            Parallel.For(0, map.Texels.Length, i =>
+            {
+                var triangle = map.TargetTriangle[i];
+                if (!transfer.TrySide(triangle, out var left)) return;
+                if (!transfer.TrySourceUv(map, triangle, map.TargetBarycentric[i], map.TargetPositions[i], map.TargetNormals[i], out var uv)) return;
+                map.BaseSourceUv[i] = uv;
+                map.BaseValid[i] = true;
+                map.SourceUv[i] = uv;
+                map.Valid[i] = true;
+                side[i] = left ? (byte)1 : (byte)2;
+            });
+
+            foreach (var s in side)
+            {
+                if (s != 0) regionTexels[s - 1]++;
+            }
+
+            return null;
+        }
+
+        // Global Constraints (centre group): the pole when its weld group is a vertex of the region's triangles, otherwise
+        // the region's landmark vertex. A pole-less avatar's Choice.Nipples already holds the region vertex.
+        private static int CentreVertex(FBXUVBodyGeometry geometry, int[] weldOf, FBXUVBodyNippleRegion region, int pole)
+        {
+            if (pole < 0 || pole >= weldOf.Length) return region.Vertex;
+            var group = weldOf[pole];
+            var triangles = geometry.Triangles;
+            foreach (var t in region.Triangles)
+            {
+                for (var i = 0; i < 3; i++)
+                {
+                    if (weldOf[triangles[t * 3 + i]] == group) return pole;
+                }
+            }
+
+            return region.Vertex;
         }
 
         // Skips the skeleton alignment and the surface refinement: the source vertices are used as they are (spec §8.3).
@@ -144,18 +240,23 @@ namespace GokouKotori.FBXUVTextureTransfer
             }
         }
 
-        // Spec §3.1–3.4. moves[k] = the along-surface offset m = (t − s) − ((t − s)·n) n from the skeleton-aligned source
-        // nipple s to the target nipple t (left, right). Returns the refined source when the landmarks are used, otherwise
-        // null and the reason; aligned is only read.
+        // Spec §3.1–3.4, 2026-11-06 spec §4.2–4.4 and §5.1. moves[k] = the along-surface offset m = (t − s) − ((t − s)·n) n
+        // from the skeleton-aligned source landmark s to the target landmark t (left, right); scales[k] = k = ρ_t / ρ_s′
+        // when the size check passes (landmarks.ScaleUsed / ScaleReason), else left NaN. Returns the refined source when
+        // the landmarks are used, otherwise null and the reason; aligned is only read.
         private static Vector3[] RefineOnNipples(FBXUVBodyGeometry source, FBXUVBodyGeometry target, Vector3[] aligned,
-            FBXUVBodyNipples sourceNipples, FBXUVBodyNipples targetNipples, Vector3[] moves, out string reason)
+            FBXUVBodyLandmarkChoice sourceChoice, FBXUVBodyLandmarkChoice targetChoice, FBXUVBodyLandmarkResult landmarks,
+            Vector3[] moves, float[] scales, float[] coreRadii, out string reason)
         {
+            var sourceNipples = sourceChoice.Nipples;
+            var targetNipples = targetChoice.Nipples;
             var sizeFactor = target.SizeFactor;
-            var centers = new[]
+            var members = new[]
             {
-                Mean(aligned, FBXUVBodyLandmarks.GroupMembers(source, sourceNipples.Left)),
-                Mean(aligned, FBXUVBodyLandmarks.GroupMembers(source, sourceNipples.Right)),
+                FBXUVBodyLandmarks.GroupMembers(source, sourceNipples.Left),
+                FBXUVBodyLandmarks.GroupMembers(source, sourceNipples.Right),
             };
+            var centers = new[] { Mean(aligned, members[0]), Mean(aligned, members[1]) };
             var points = new[] { targetNipples.LeftPosition, targetNipples.RightPosition };
             var normals = new[] { targetNipples.LeftNormal, targetNipples.RightNormal };
             for (var k = 0; k < 2; k++)
@@ -172,23 +273,69 @@ namespace GokouKotori.FBXUVTextureTransfer
                 return null;
             }
 
-            if (moves[0].magnitude < minOffset && moves[1].magnitude < minOffset)
+            landmarks.ScaleReason = CheckScale(source, aligned, sourceChoice.Region, targetChoice.Region, centers, coreRadii, scales);
+            landmarks.ScaleUsed = landmarks.ScaleReason == null;
+
+            // Spec §4.4 / §5.1: shift only for a noticeable offset, scale only for a noticeable size ratio, and when
+            // neither applies leave the source untouched (no anchors either), bit-identical to alignNipples off.
+            var shift = moves[0].magnitude >= minOffset || moves[1].magnitude >= minOffset;
+            var scale = landmarks.ScaleUsed
+                && (Mathf.Abs(scales[0] - 1f) >= FBXUVBodyLandmarkScale.NegligibleScale || Mathf.Abs(scales[1] - 1f) >= FBXUVBodyLandmarkScale.NegligibleScale);
+            if (!shift && !scale)
             {
                 reason = FBXUVBodyLandmarks.NotNeededReason;
                 return null;
             }
 
-            if (!FBXUVBodyLandmarkWarp.TryWarp(aligned, centers, moves, FBXUVBodyLandmarkWarp.RadiusMeters * sizeFactor, out var warped, out reason)) return null;
+            var moved = aligned;
+            if (shift && !FBXUVBodyLandmarkWarp.TryWarp(aligned, centers, moves, FBXUVBodyLandmarkWarp.RadiusMeters * sizeFactor, out moved, out reason)) return null;
+            if (scale)
+            {
+                // About the shifted landmarks (both measured before either side is scaled), along the target normals.
+                var centres = new[] { Mean(moved, members[0]), Mean(moved, members[1]) };
+                for (var k = 0; k < 2; k++) moved = FBXUVBodyLandmarkScale.Apply(moved, centres[k], normals[k], coreRadii[k], scales[k]);
+            }
+
+            reason = null;
             var anchors = new[]
             {
                 new FBXUVBodyAnchor { SourceVertex = sourceNipples.Left, TargetPoint = points[0] },
                 new FBXUVBodyAnchor { SourceVertex = sourceNipples.Right, TargetPoint = points[1] },
             };
-            return FBXUVBodySurfaceRefine.Refine(source, warped, target, anchors);
+            return FBXUVBodySurfaceRefine.Refine(source, moved, target, anchors);
         }
 
-        private static FBXUVBodyLandmarkSide LandmarkSide(FBXUVBodyCorrespondence map, int sourceVertex, int targetVertex, Vector3 move)
+        // 2026-11-06 spec §4.3. Null when the areola size can be matched (coreRadii = ρ_s′ measured on the skeleton-aligned
+        // source with the source region's triangles, scales = ρ_t / ρ_s′), otherwise why not: a region missing (source
+        // first), k outside [MinScale, MaxScale] on either side, or the two supports 3ρ_s′ overlapping.
+        private static string CheckScale(FBXUVBodyGeometry source, Vector3[] aligned, FBXUVBodyNippleRegions sourceRegion,
+            FBXUVBodyNippleRegions targetRegion, Vector3[] centers, float[] coreRadii, float[] scales)
         {
+            if (sourceRegion == null) return FBXUVBodyLandmarks.ShapeNoRegionReason(true);
+            if (targetRegion == null) return FBXUVBodyLandmarks.ShapeNoRegionReason(false);
+            var sourceSides = new[] { sourceRegion.Left, sourceRegion.Right };
+            var targetSides = new[] { targetRegion.Left, targetRegion.Right };
+            var ratios = new float[2];
+            for (var k = 0; k < 2; k++)
+            {
+                coreRadii[k] = FBXUVBodyNippleShape.RegionRadius(aligned, source.Triangles, sourceSides[k].Triangles);
+                ratios[k] = targetSides[k].Radius / coreRadii[k];
+                if (!(ratios[k] >= FBXUVBodyLandmarkScale.MinScale && ratios[k] <= FBXUVBodyLandmarkScale.MaxScale))
+                    return FBXUVBodyLandmarks.ScaleOutOfRangeReason;
+            }
+
+            if ((centers[0] - centers[1]).magnitude < FBXUVBodyLandmarkScale.SupportFactor * (coreRadii[0] + coreRadii[1]))
+                return FBXUVBodyLandmarks.ScaleOverlapReason;
+            scales[0] = ratios[0];
+            scales[1] = ratios[1];
+            return null;
+        }
+
+        private static FBXUVBodyLandmarkSide LandmarkSide(FBXUVBodyCorrespondence map, FBXUVBodyLandmarkChoice sourceChoice,
+            FBXUVBodyLandmarkChoice targetChoice, bool left, Vector3 move, float scale, float alignedRadius)
+        {
+            var sourceVertex = left ? sourceChoice.Nipples.Left : sourceChoice.Nipples.Right;
+            var targetVertex = left ? targetChoice.Nipples.Left : targetChoice.Nipples.Right;
             return new FBXUVBodyLandmarkSide
             {
                 SourceVertex = sourceVertex,
@@ -196,7 +343,18 @@ namespace GokouKotori.FBXUVTextureTransfer
                 OffsetBefore = move.magnitude / map.Target.SizeFactor,
                 OffsetAfter = MeasureLandmarkOffset(map, sourceVertex, targetVertex),
                 TargetUvs = FBXUVBodyLandmarks.GroupUvs(map.Target, targetVertex),
+                SourceRadius = NormalizedRadius(sourceChoice.Region, left, map.Source.SizeFactor),
+                TargetRadius = NormalizedRadius(targetChoice.Region, left, map.Target.SizeFactor),
+                SourceAlignedRadius = float.IsNaN(alignedRadius) ? float.NaN : alignedRadius / map.Target.SizeFactor,
+                Scale = scale,
             };
+        }
+
+        // The usable region's ρ on that side divided by the avatar's SizeFactor; NaN without a usable region.
+        private static float NormalizedRadius(FBXUVBodyNippleRegions regions, bool left, float sizeFactor)
+        {
+            if (regions == null) return float.NaN;
+            return (left ? regions.Left : regions.Right).Radius / sizeFactor;
         }
 
         // Spec §3.5: how far from the source nipple the target nipple reads. Looks up the map's source surface from the

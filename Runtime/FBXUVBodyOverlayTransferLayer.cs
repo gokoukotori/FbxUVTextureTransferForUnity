@@ -17,6 +17,8 @@ namespace GokouKotori.FBXUVTextureTransfer
         public Texture2D overlayTexture;
         public Texture sourceBodyTexture;
         public bool alignNipples = true;
+        public FBXUVBodyNippleShapeSelection sourceNippleShape = new FBXUVBodyNippleShapeSelection();
+        public FBXUVBodyNippleShapeSelection targetNippleShape = new FBXUVBodyNippleShapeSelection();
         public FBXUVBodyManualSettings manual = new FBXUVBodyManualSettings();
         public Shader bodyShader;
         public ComputeShader pixelProcessShader;
@@ -79,7 +81,7 @@ namespace GokouKotori.FBXUVTextureTransfer
                 var targetTexture = FBXUVCanvasTargetUtility.ResolveTargetTexture(this);
                 if (targetTexture == null) throw new ArgumentException("親 MultiLayerImageCanvas の Target Texture が見つかりません。");
                 if (resolution <= 0) throw new ArgumentException("対応マップの解像度が不正です。");
-                entry = FBXUVBodyCorrespondenceCache.Get(sourceModelOrPrefab, sourceBodyTexture, targetModelOrPrefab, targetTexture, resolution, alignNipples);
+                entry = FBXUVBodyCorrespondenceCache.Get(sourceModelOrPrefab, sourceBodyTexture, targetModelOrPrefab, targetTexture, resolution, alignNipples, sourceNippleShape, targetNippleShape);
                 reason = string.Empty;
                 return true;
             }
@@ -154,6 +156,8 @@ namespace GokouKotori.FBXUVTextureTransfer
         {
             manual ??= new FBXUVBodyManualSettings();
             manual.pins ??= new List<FBXUVBodyPin>();
+            sourceNippleShape ??= new FBXUVBodyNippleShapeSelection();
+            targetNippleShape ??= new FBXUVBodyNippleShapeSelection();
             EnsureResources();
         }
         private void EnsureResources()

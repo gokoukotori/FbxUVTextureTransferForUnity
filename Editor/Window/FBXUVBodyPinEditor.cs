@@ -630,7 +630,18 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         internal static string CorrespondenceInputs(FBXUVBodyOverlayTransferLayer owner, int resolution)
             => Id(owner.sourceModelOrPrefab) + "|" + Id(owner.sourceBodyTexture) + "|" + Id(owner.targetModelOrPrefab) + "|"
-               + Id(FBXUVCanvasTargetUtility.ResolveTargetTexture(owner)) + "|" + resolution + "|" + owner.alignNipples;
+               + Id(FBXUVCanvasTargetUtility.ResolveTargetTexture(owner)) + "|" + resolution + "|" + owner.alignNipples
+               + "|" + ShapeInput(owner.sourceModelOrPrefab, owner.sourceBodyTexture, owner.sourceNippleShape)
+               + "|" + ShapeInput(owner.targetModelOrPrefab, FBXUVCanvasTargetUtility.ResolveTargetTexture(owner), owner.targetNippleShape);
+
+        // The selection and what it resolves to now: renaming or adding a shape key changes the correspondence.
+        private static string ShapeInput(GameObject model, Texture texture, FBXUVBodyNippleShapeSelection selection)
+        {
+            var mode = selection == null ? FBXUVBodyNippleShapeMode.Auto : selection.mode;
+            var name = selection == null ? "" : selection.shapeName;
+            var resolved = model == null || texture == null ? null : FBXUVBodyNippleShape.Resolve(model, texture, selection, out _);
+            return (int)mode + ":" + name + ":" + resolved;
+        }
 
         private static int Id(Object value) => value == null ? 0 : value.GetInstanceID();
 

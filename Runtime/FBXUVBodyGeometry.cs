@@ -32,9 +32,14 @@ namespace GokouKotori.FBXUVTextureTransfer
         internal float SizeFactor => Height / 1f;
         internal IReadOnlyList<FBXUVBodyPart> Parts;
 
+        internal string NippleShapeName;
+        internal string NippleShapeIssue;
+        internal bool NippleShapeAuto;
+        internal float[] NippleShapeDeltas;
+
         internal static int CreateCallCountForTesting;
 
-        internal static FBXUVBodyGeometry Create(GameObject modelRoot, Texture bodyTexture)
+        internal static FBXUVBodyGeometry Create(GameObject modelRoot, Texture bodyTexture, FBXUVBodyNippleShapeSelection nippleShape = null)
         {
             CreateCallCountForTesting++;
             if (modelRoot == null) throw new ArgumentException("モデルが指定されていません。");
@@ -78,6 +83,9 @@ namespace GokouKotori.FBXUVTextureTransfer
             var influenceBones = new List<int>();
             var influenceWeights = new List<float>();
             var parts = new List<FBXUVBodyPart>();
+
+            var nippleShapeName = FBXUVBodyNippleShape.Resolve(usages, nippleShape, out var nippleShapeMissing);
+            var nippleDeltas = nippleShapeName != null ? new List<float>() : null;
 
             foreach (var usage in usages)
             {
@@ -144,6 +152,13 @@ namespace GokouKotori.FBXUVTextureTransfer
                 else
                     skinnedNormals = RecalculateNormals(skinnedPositions, usage, mesh);
 
+                if (nippleDeltas != null)
+                {
+                    var shapeIndex = mesh.GetBlendShapeIndex(nippleShapeName);
+                    if (shapeIndex >= 0) nippleDeltas.AddRange(FBXUVBodyNippleShape.ReadDeltas(mesh, shapeIndex));
+                    else nippleDeltas.AddRange(new float[vertexCount]);
+                }
+
                 positions.AddRange(skinnedPositions);
                 normals.AddRange(skinnedNormals);
                 for (var i = 0; i < vertexCount; i++) uvs.Add(i < meshUvs.Length ? meshUvs[i] : Vector2.zero);
@@ -189,6 +204,10 @@ namespace GokouKotori.FBXUVTextureTransfer
                 InfluenceWeights = influenceWeights.ToArray(),
                 Joints = new ReadOnlyDictionary<int, Vector3>(joints),
                 Parts = parts.AsReadOnly(),
+                NippleShapeName = nippleShapeName,
+                NippleShapeIssue = nippleShapeMissing ? $"シェイプキー {nippleShape.shapeName} が見つかりません" : null,
+                NippleShapeAuto = nippleShape == null || nippleShape.mode == FBXUVBodyNippleShapeMode.Auto,
+                NippleShapeDeltas = nippleDeltas?.ToArray(),
             };
 
             if (geometry.Triangles.Length == 0)

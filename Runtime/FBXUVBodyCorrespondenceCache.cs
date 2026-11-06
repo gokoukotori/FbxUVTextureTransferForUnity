@@ -33,7 +33,7 @@ namespace GokouKotori.FBXUVTextureTransfer
     internal static class FBXUVBodyCorrespondenceCache
     {
         internal const int Capacity = 2;
-        internal const int AlgorithmVersion = 2;
+        internal const int AlgorithmVersion = 4;
 
         private static readonly List<FBXUVBodyCorrespondenceEntry> entries = new List<FBXUVBodyCorrespondenceEntry>();
         private static readonly Dictionary<string, string> failures = new Dictionary<string, string>();
@@ -44,9 +44,11 @@ namespace GokouKotori.FBXUVTextureTransfer
             GameObject targetRoot,
             Texture targetTexture,
             int resolution,
-            bool alignNipples = true)
+            bool alignNipples = true,
+            FBXUVBodyNippleShapeSelection sourceNippleShape = null,
+            FBXUVBodyNippleShapeSelection targetNippleShape = null)
         {
-            var key = ComputeKey(sourceRoot, sourceBodyTexture, targetRoot, targetTexture, resolution, alignNipples);
+            var key = ComputeKey(sourceRoot, sourceBodyTexture, targetRoot, targetTexture, resolution, alignNipples, sourceNippleShape, targetNippleShape);
             for (var i = 0; i < entries.Count; i++)
             {
                 if (entries[i].Key != key) continue;
@@ -61,8 +63,8 @@ namespace GokouKotori.FBXUVTextureTransfer
             FBXUVBodyCorrespondence correspondence;
             try
             {
-                var source = FBXUVBodyGeometry.Create(sourceRoot, sourceBodyTexture);
-                var target = FBXUVBodyGeometry.Create(targetRoot, targetTexture);
+                var source = FBXUVBodyGeometry.Create(sourceRoot, sourceBodyTexture, sourceNippleShape);
+                var target = FBXUVBodyGeometry.Create(targetRoot, targetTexture, targetNippleShape);
                 correspondence = FBXUVBodyCorrespondence.Build(source, target, resolution, alignNipples);
             }
             catch (ArgumentException exception)
@@ -95,7 +97,9 @@ namespace GokouKotori.FBXUVTextureTransfer
             GameObject targetRoot,
             Texture targetTexture,
             int resolution,
-            bool alignNipples = true)
+            bool alignNipples = true,
+            FBXUVBodyNippleShapeSelection sourceNippleShape = null,
+            FBXUVBodyNippleShapeSelection targetNippleShape = null)
         {
             using (var stream = new MemoryStream())
             using (var writer = new BinaryWriter(stream))
@@ -103,8 +107,8 @@ namespace GokouKotori.FBXUVTextureTransfer
                 writer.Write(AlgorithmVersion);
                 writer.Write(resolution);
                 writer.Write(alignNipples);
-                WriteModel(writer, sourceRoot, sourceBodyTexture);
-                WriteModel(writer, targetRoot, targetTexture);
+                WriteModel(writer, sourceRoot, sourceBodyTexture, sourceNippleShape);
+                WriteModel(writer, targetRoot, targetTexture, targetNippleShape);
                 writer.Flush();
                 using (var sha = SHA256.Create())
                 {
@@ -113,7 +117,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             }
         }
 
-        private static void WriteModel(BinaryWriter writer, GameObject root, Texture texture)
+        private static void WriteModel(BinaryWriter writer, GameObject root, Texture texture, FBXUVBodyNippleShapeSelection nippleShape)
         {
             writer.Write(texture != null ? texture.GetInstanceID() : 0);
             if (root == null)
@@ -138,6 +142,12 @@ namespace GokouKotori.FBXUVTextureTransfer
             writer.Write(-2);
 
             var usages = FBXUVTextureUsage.Collect(root, texture);
+            // The nipple shape: the selection, what it resolves to and the shape's movement decide the landmark regions.
+            var selection = nippleShape ?? new FBXUVBodyNippleShapeSelection();
+            var shapeName = FBXUVBodyNippleShape.Resolve(usages, selection, out _);
+            writer.Write((int)selection.mode);
+            writer.Write(selection.shapeName ?? string.Empty);
+            writer.Write(shapeName ?? string.Empty);
             writer.Write(usages.Count);
             foreach (var usage in usages)
             {
@@ -154,6 +164,18 @@ namespace GokouKotori.FBXUVTextureTransfer
                 // The normals decide which source faces count (within 60°).
                 Write(writer, mesh.normals);
                 Write(writer, mesh.uv);
+                var shapeIndex = shapeName == null ? -1 : mesh.GetBlendShapeIndex(shapeName);
+                if (shapeIndex >= 0 && mesh.GetBlendShapeFrameCount(shapeIndex) > 0)
+                {
+                    var frame = mesh.GetBlendShapeFrameCount(shapeIndex) - 1;
+                    var shapeDeltas = new Vector3[mesh.vertexCount];
+                    mesh.GetBlendShapeFrameVertices(shapeIndex, frame, shapeDeltas, new Vector3[mesh.vertexCount], new Vector3[mesh.vertexCount]);
+                    Write(writer, shapeDeltas);
+                }
+                else
+                {
+                    writer.Write(-1);
+                }
                 var skinned = renderer as SkinnedMeshRenderer;
                 if (skinned == null) continue;
                 var boneWeights = mesh.boneWeights;

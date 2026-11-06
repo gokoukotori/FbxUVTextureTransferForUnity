@@ -15,6 +15,17 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         private List<string> diagnosticsLines;
         private IReadOnlyList<FBXUVTransferValidationIssue> lastValidationIssues;
         private string validationState;
+        private ShapeChoices sourceChoices;
+        private ShapeChoices targetChoices;
+
+        // The candidates and the automatic name of one (model, texture) pair. Rebuilt only when either instance changes: the
+        // inspector repaints constantly and must not scan the whole prefab each time.
+        private sealed class ShapeChoices
+        {
+            internal int ModelId, TextureId;
+            internal IReadOnlyList<string> Names = new List<string>();
+            internal string AutoName;
+        }
 
         private void OnEnable()
         {
@@ -37,6 +48,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             diagnosticsLines = null;
             validationState = null;
             lastValidationIssues = null;
+            sourceChoices = null;
+            targetChoices = null;
             Repaint();
         }
 
@@ -85,8 +98,15 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             EditorGUILayout.PropertyField(serializedObject.FindProperty("overlayTexture"), new GUIContent("オーバーレイ画像"));
             EditorGUILayout.PropertyField(
                 serializedObject.FindProperty("alignNipples"),
-                new GUIContent("乳首を目印に合わせる", "胸で辺が扇状に集まる点（乳首）を左右の目印として、転送元と転送先の位置を合わせます。"));
+                new GUIContent("乳首を目印に合わせる", "胸で辺が扇状に集まる点（乳首）や乳首用シェイプキーが動かす範囲を左右の目印として、転送元と転送先の乳首の位置と乳輪の大きさを合わせます。"));
             var changed = serializedObject.ApplyModifiedProperties();
+            if (layer.alignNipples)
+            {
+                changed |= DrawShapePopup(layer, "転送元のシェイプキー", layer.sourceNippleShape, layer.sourceModelOrPrefab, layer.sourceBodyTexture, ref sourceChoices);
+                changed |= DrawShapePopup(layer, "転送先のシェイプキー", layer.targetNippleShape, layer.targetModelOrPrefab,
+                    FBXUVCanvasTargetUtility.ResolveTargetTexture(layer), ref targetChoices);
+                serializedObject.Update();
+            }
             if (layer.sourceModelOrPrefab != previousSource)
             {
                 ApplySuggestedSourceTexture(layer);
@@ -101,6 +121,70 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             EditorGUILayout.Space(4f);
             if (GUILayout.Button("ボディ転送エディターを開く")) FBXUVBodyOverlayTransferWindow.Open(layer);
             DrawValidation(layer);
+        }
+
+        // Auto ("自動（name）" / "自動（見つかりません）"), None ("使わない"), then every shape key of the body's meshes.
+        private bool DrawShapePopup(
+            FBXUVBodyOverlayTransferLayer layer,
+            string label,
+            FBXUVBodyNippleShapeSelection selection,
+            GameObject model,
+            Texture texture,
+            ref ShapeChoices choices)
+        {
+            if (selection == null) return false;
+            var modelId = model == null ? 0 : model.GetInstanceID();
+            var textureId = texture == null ? 0 : texture.GetInstanceID();
+            if (choices == null || choices.ModelId != modelId || choices.TextureId != textureId)
+            {
+                choices = new ShapeChoices { ModelId = modelId, TextureId = textureId };
+                if (model != null && texture != null)
+                {
+                    var usages = FBXUVTextureUsage.Collect(model, texture);
+                    choices.Names = FBXUVBodyNippleShape.CandidateNames(usages);
+                    choices.AutoName = FBXUVBodyNippleShape.AutoName(usages);
+                }
+            }
+
+            var labels = new List<string>
+            {
+                choices.AutoName == null ? "自動（見つかりません）" : "自動（" + choices.AutoName + "）",
+                "使わない"
+            };
+            labels.AddRange(choices.Names);
+            var index = 0;
+            if (selection.mode == FBXUVBodyNippleShapeMode.None) index = 1;
+            else if (selection.mode == FBXUVBodyNippleShapeMode.Named)
+            {
+                var found = -1;
+                for (var i = 0; i < choices.Names.Count; i++)
+                {
+                    if (choices.Names[i] == selection.shapeName) found = i;
+                }
+                if (found < 0)
+                {
+                    // A saved name this model does not have: keep it visible so the choice is not silently changed.
+                    labels.Add(selection.shapeName + "（見つかりません）");
+                    found = choices.Names.Count;
+                }
+                index = 2 + found;
+            }
+
+            EditorGUI.BeginChangeCheck();
+            var picked = EditorGUILayout.Popup(label, index, labels.ToArray());
+            if (!EditorGUI.EndChangeCheck() || picked == index) return false;
+            Undo.RecordObject(layer, label + "を変更");
+            if (picked == 0) selection.mode = FBXUVBodyNippleShapeMode.Auto;
+            else if (picked == 1) selection.mode = FBXUVBodyNippleShapeMode.None;
+            else if (picked - 2 < choices.Names.Count)
+            {
+                selection.mode = FBXUVBodyNippleShapeMode.Named;
+                selection.shapeName = choices.Names[picked - 2];
+            }
+            else return false;
+            EditorUtility.SetDirty(layer);
+            PrefabUtility.RecordPrefabInstancePropertyModifications(layer);
+            return true;
         }
 
         private void DrawSourceBodyTexture(FBXUVBodyOverlayTransferLayer layer)
@@ -181,6 +265,10 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (diagnostics != null) lines.Add("見つかった割合: " + diagnostics.FoundRate.ToString("P1"));
             var landmarkLine = DescribeLandmarks(entry.Correspondence.Landmarks);
             if (landmarkLine != null) lines.Add(landmarkLine);
+            var shapeLine = DescribeNippleShapes(entry.Correspondence.Landmarks);
+            if (shapeLine != null) lines.Add(shapeLine);
+            var regionLine = DescribeRegionTransfer(entry.Correspondence.Landmarks);
+            if (regionLine != null) lines.Add(regionLine);
             var warningLines = new List<string>();
             if (diagnostics?.ByBone != null)
             {
@@ -201,8 +289,45 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 return "乳首の目印: 使っていません（" + result.Reason + "）";
             return "乳首の目印: 使用（ずれ 左 " + Millimeters(result.Left.OffsetBefore) + " → " + Millimeters(result.Left.OffsetAfter)
                    + " mm、右 " + Millimeters(result.Right.OffsetBefore) + " → " + Millimeters(result.Right.OffsetAfter)
-                   + " mm、身長 1 m 換算）";
+                   + " mm、" + DescribeSize(result) + "、身長 1 m 換算）";
         }
+
+        // 大きさ 0.91 倍（転送元 11.9 mm → 転送先 10.8 mm）, or why the size was left alone. The left side's values stand for both.
+        private static string DescribeSize(FBXUVBodyLandmarkResult result)
+        {
+            if (!result.ScaleUsed)
+                return "大きさ: 合わせていません" + (string.IsNullOrEmpty(result.ScaleReason) ? "" : "（" + result.ScaleReason + "）");
+            var left = result.Left;
+            var scale = float.IsNaN(left.Scale) ? "—" : left.Scale.ToString("0.00", CultureInfo.InvariantCulture);
+            return "大きさ " + scale + " 倍（転送元 " + Millimeters(left.SourceAlignedRadius) + " mm → 転送先 " + Millimeters(left.TargetRadius) + " mm）";
+        }
+
+        // The shape key line of the diagnostics; null when the landmarks are off or there is no result.
+        internal static string DescribeNippleShapes(FBXUVBodyLandmarkResult result)
+        {
+            if (result == null || !result.Enabled) return null;
+            return "乳首のシェイプキー: 転送元 " + DescribeShape(result.SourceShape, result.SourceShapeAuto, result.SourceShapeReason)
+                   + "、転送先 " + DescribeShape(result.TargetShape, result.TargetShapeAuto, result.TargetShapeReason);
+        }
+
+        // The region copy line of the diagnostics; null when the landmarks are off or there is nothing to report
+        // (no usable region on both avatars: neither a copy nor a reason).
+        internal static string DescribeRegionTransfer(FBXUVBodyLandmarkResult result)
+        {
+            if (result == null || !result.Enabled) return null;
+            if (result.RegionTransferUsed)
+            {
+                return "乳首の範囲: 範囲どうしで写しました（左 " + (result.Left?.RegionTexels ?? 0).ToString(CultureInfo.InvariantCulture)
+                       + " 画素、右 " + (result.Right?.RegionTexels ?? 0).ToString(CultureInfo.InvariantCulture) + " 画素）";
+            }
+            if (result.RegionTransferReason == null) return null;
+            return "乳首の範囲: 範囲どうしでは写していません（" + result.RegionTransferReason + "）";
+        }
+
+        // "{name|なし}{（自動）}{（reason）}": （自動） also follows なし when the automatic search found nothing.
+        private static string DescribeShape(string name, bool auto, string reason)
+            => (string.IsNullOrEmpty(name) ? "なし" : name) + (auto ? "（自動）" : "")
+               + (string.IsNullOrEmpty(reason) ? "" : "（" + reason + "）");
 
         private static string Millimeters(float meters)
             => float.IsNaN(meters) ? "—" : (meters * 1000f).ToString("0.0", CultureInfo.InvariantCulture);

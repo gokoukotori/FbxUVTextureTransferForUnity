@@ -235,9 +235,16 @@ namespace GokouKotori.FBXUVTextureTransfer
                 var tangent = u - Vector3.Dot(u, normal) * normal;
                 // Back onto the target surface, with that surface's normal: on curved parts (arms) a point moved along the
                 // tangent plane turns far from X's normal, and searching the source with X's normal would leave holes.
-                Snap(map, point - tangent, normal, tangent.magnitude, radius, out var moved, out var movedNormal, out _, out _);
+                var snapped = Snap(map, point - tangent, normal, tangent.magnitude, radius, out var moved, out var movedNormal, out var onTriangle, out var onBary);
+                // 2026-11-06 region spec §4.5: where the moved point lands on a target region triangle, read it with the
+                // region-to-region copy, as Build wrote Base* (the rim band's regular point is searched from the moved point).
+                if (snapped && map.RegionTransfer != null && map.RegionTransfer.TrySourceUv(map, onTriangle, onBary, moved, movedNormal, out var regionUv))
+                {
+                    map.SourceUv[i] = regionUv;
+                    map.Valid[i] = true;
+                }
                 // The same search as FBXUVBodyCorrespondence.Build (normal within 60°, 45 mm × SizeFactor).
-                if (map.SourceGrid.Nearest(moved, movedNormal, FBXUVBodyCorrespondence.MaxRing, sourceDistance, out var triangle, out var bary, out _))
+                else if (map.SourceGrid.Nearest(moved, movedNormal, FBXUVBodyCorrespondence.MaxRing, sourceDistance, out var triangle, out var bary, out _))
                 {
                     map.SourceUv[i] = Interpolate(source.Uvs, source.Triangles, triangle, bary);
                     map.Valid[i] = true;
