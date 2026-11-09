@@ -1,9 +1,9 @@
 using System;
+using System.Collections.Generic;
 using GokouKotori.FBXUVTextureTransfer.Editor.NDMF;
 using UnityEditor;
 using UnityEngine;
 using Unity.Profiling;
-using UnityEngine.Rendering;
 
 namespace GokouKotori.FBXUVTextureTransfer.Editor
 {
@@ -34,29 +34,32 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             using (InspectorGuiMarker.Auto())
             {
                 serializedObject.UpdateIfRequiredOrScript();
+                DrawHeader("テクスチャ転送");
                 DrawModelFields();
                 EditorGUILayout.PropertyField(
                     serializedObject.FindProperty("defaultSourceTexture"),
                     new GUIContent("転送元テクスチャ"));
 
+                FBXUVLayerInspectorGUI.DrawCanvasTarget(Layer);
+
                 EditorGUILayout.Space(4f);
-                // Regions are edited in the UV Region Editor only, like the eyes and landmarks of the other layers.
+                // Regions are edited in the texture transfer editor only, like the eyes and landmarks of the other layers.
                 var bindings = FBXUVRegionBindingSerializedPropertyUtility.FindBindings(serializedObject);
                 EditorGUILayout.LabelField("登録したRegion", (bindings?.arraySize ?? 0).ToString());
 
-                if (GUILayout.Button("UV領域エディターを開く"))
+                if (GUILayout.Button(FBXUVEditorNames.OpenButton(FBXUVEditorNames.TextureTransferEditor)))
                 {
                     FBXUVTextureTransferWindow.Open(Layer);
                 }
 
-                FBXUVLayerInspectorGUI.DrawCanvasTarget(Layer);
-                DrawResourceState();
-                DrawEnvironmentNotice();
-                DrawValidation(() => FBXUVTextureTransferValidation.ValidateLayer(Layer));
+                DrawValidation();
 
                 FBXUVRegionBindingSerializedPropertyUtility.ApplyModifiedProperties(serializedObject);
             }
         }
+
+        private protected override IReadOnlyList<FBXUVTransferValidationIssue> Validate()
+            => FBXUVTextureTransferValidation.ValidateLayer(Layer);
 
         internal static int OrientationPopupIndex(int serializedValue)
         {
@@ -64,26 +67,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             return index >= 0 ? index : 0;
         }
 
-        private void DrawResourceState()
-        {
-            if (Layer.ResolveTriangleShader() == null || Layer.ResolvePixelProcessShader() == null)
-            {
-                EditorGUILayout.HelpBox(
-                    "内部Shader/ComputeShaderを読み込めません。パッケージを再インポートしてください。",
-                    MessageType.Error);
-            }
-        }
-
-        private static void DrawEnvironmentNotice()
-        {
-            if (Application.platform != RuntimePlatform.WindowsEditor ||
-                SystemInfo.graphicsDeviceType != GraphicsDeviceType.Direct3D11)
-            {
-                EditorGUILayout.HelpBox(
-                    "動作要件はUnity 2022.3.22f1以上・Windows・D3D11です。現在のgraphics APIは未検証です。",
-                    MessageType.Warning);
-            }
-        }
-
+        private protected override bool HasRequiredResources()
+            => Layer.ResolveTriangleShader() != null && Layer.ResolvePixelProcessShader() != null;
     }
 }

@@ -16,7 +16,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             var current = layer == null ? null : layer.transform.parent;
             if (current == null)
             {
-                error = "Layerを MultiLayerImageCanvas または LayerFolder の子に配置してください。";
+                error = "レイヤーを MultiLayerImageCanvas または LayerFolder の子に配置してください。";
                 return false;
             }
 
@@ -32,7 +32,7 @@ namespace GokouKotori.FBXUVTextureTransfer
 
                 if (current.GetComponent<LayerFolder>() == null)
                 {
-                    error = "Layerから MultiLayerImageCanvas までの全ての中間親には LayerFolder が必要です。";
+                    error = "レイヤーから MultiLayerImageCanvas までの全ての中間親には LayerFolder が必要です。";
                     context = current.gameObject;
                     return false;
                 }

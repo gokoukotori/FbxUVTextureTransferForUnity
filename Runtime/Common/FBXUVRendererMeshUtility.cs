@@ -16,6 +16,14 @@ namespace GokouKotori.FBXUVTextureTransfer
             return filter == null ? null : filter.sharedMesh;
         }
 
+        // Names from below root down to item, joined with '/'. Empty when item is root.
+        internal static string RelativePath(Transform root, Transform item)
+        {
+            var names = new Stack<string>();
+            while (item != root && item != null) { names.Push(item.name); item = item.parent; }
+            return string.Join("/", names);
+        }
+
         internal static IEnumerable<(Renderer Renderer, Mesh Mesh)> Collect(GameObject root)
         {
             if (root == null) yield break;

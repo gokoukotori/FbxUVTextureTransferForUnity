@@ -10,7 +10,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
     [CustomEditor(typeof(FBXUVBodyOverlayTransferLayer))]
     internal sealed class FBXUVBodyOverlayTransferLayerEditor : FBXUVLayerEditor<FBXUVBodyOverlayTransferLayer>
     {
-        private List<string> diagnosticsLines;
         private ShapeChoices sourceChoices;
         private ShapeChoices targetChoices;
 
@@ -32,7 +31,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private protected override void ClearResults()
         {
-            diagnosticsLines = null;
             sourceChoices = null;
             targetChoices = null;
         }
@@ -66,31 +64,23 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private static string RendererPath(Transform root, Transform transform)
         {
-            var names = new List<string>();
-            for (var current = transform; current != null && current != root; current = current.parent) names.Add(current.name);
-            names.Reverse();
-            return names.Count == 0 ? transform.name : string.Join("/", names);
+            var path = FBXUVRendererMeshUtility.RelativePath(root, transform);
+            return path.Length == 0 ? transform.name : path;
         }
+
+        private protected override bool HasRequiredResources()
+            => Layer.ResolveBodyShader() != null && Layer.ResolvePixelProcessShader() != null;
 
         public override void OnInspectorGUI()
         {
             var layer = Layer;
             serializedObject.UpdateIfRequiredOrScript();
-            EditorGUILayout.LabelField("ボディ転送（β版）", EditorStyles.boldLabel);
+            DrawHeader("ボディ転送（β版）");
             var previousSource = layer.sourceModelOrPrefab;
             DrawModelFields();
             EditorGUILayout.PropertyField(serializedObject.FindProperty("overlayTexture"), new GUIContent("オーバーレイ画像"));
-            EditorGUILayout.PropertyField(
-                serializedObject.FindProperty("alignNipples"),
-                new GUIContent("乳首を目印に合わせる", "胸で辺が扇状に集まる点（乳首）や乳首用シェイプキーが動かす範囲を左右の目印として、転送元と転送先の乳首の位置と乳輪の大きさを合わせます。"));
             var changed = serializedObject.ApplyModifiedProperties();
-            if (layer.alignNipples)
-            {
-                changed |= DrawShapePopup(layer, "転送元のシェイプキー", layer.sourceNippleShape, layer.sourceModelOrPrefab, layer.sourceBodyTexture, ref sourceChoices);
-                changed |= DrawShapePopup(layer, "転送先のシェイプキー", layer.targetNippleShape, layer.targetModelOrPrefab,
-                    FBXUVCanvasTargetUtility.ResolveTargetTexture(layer), ref targetChoices);
-                serializedObject.Update();
-            }
+            // The source model drives the suggestion, so it is applied before the source body texture is drawn.
             if (layer.sourceModelOrPrefab != previousSource)
             {
                 ApplySuggestedSourceTexture(layer);
@@ -98,14 +88,30 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
 
             DrawSourceBodyTexture(layer);
+            EditorGUILayout.PropertyField(
+                serializedObject.FindProperty("alignNipples"),
+                new GUIContent("乳首を目印に合わせる", "胸で辺が扇状に集まる点（乳首）や乳首用シェイプキーが動かす範囲を左右の目印として、転送元と転送先の乳首の位置と乳輪の大きさを合わせます。"));
+            changed |= serializedObject.ApplyModifiedProperties();
+            if (layer.alignNipples)
+            {
+                changed |= DrawShapePopup(layer, "転送元のシェイプキー", layer.sourceNippleShape, layer.sourceModelOrPrefab, layer.sourceBodyTexture, ref sourceChoices);
+                changed |= DrawShapePopup(layer, "転送先のシェイプキー", layer.targetNippleShape, layer.targetModelOrPrefab,
+                    FBXUVCanvasTargetUtility.ResolveTargetTexture(layer), ref targetChoices);
+                serializedObject.Update();
+            }
+
             DrawTargetParts(layer);
-            DrawDiagnostics(layer);
-            DrawManual(layer);
-            if (changed) InvalidateResults();
+            // The pins are enabled and reset in the body transfer editor; the inspector only counts them.
+            EditorGUILayout.LabelField("手補正のピン", (layer.manual?.pins == null ? 0 : layer.manual.pins.Count).ToString());
             EditorGUILayout.Space(4f);
-            if (GUILayout.Button("ボディ転送エディターを開く")) FBXUVBodyOverlayTransferWindow.Open(layer);
-            DrawValidation(() => WithProgressBar(() => FBXUVBodyOverlayTransferValidation.ValidateLayer(layer)));
+            if (GUILayout.Button(FBXUVEditorNames.OpenButton(FBXUVEditorNames.BodyTransferEditor))) FBXUVBodyOverlayTransferWindow.Open(layer);
+            DrawDiagnostics();
+            if (changed) InvalidateResults();
+            DrawValidation();
         }
+
+        private protected override IReadOnlyList<FBXUVTransferValidationIssue> Validate()
+            => WithProgressBar(() => FBXUVBodyOverlayTransferValidation.ValidateLayer(Layer));
 
         // Auto ("自動（name）" / "自動（見つかりません）"), None ("使わない"), then every shape key of the body's meshes.
         private bool DrawShapePopup(
@@ -213,7 +219,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             EditorGUILayout.LabelField("転送先のRenderer・サブメッシュ", EditorStyles.miniBoldLabel);
             if (parts.Length == 0)
             {
-                EditorGUILayout.HelpBox("Canvasの対象テクスチャを使うサブメッシュが転送先モデルにありません。", MessageType.Warning);
+                EditorGUILayout.HelpBox("Canvasの対象テクスチャを使うサブメッシュが転送先 Model / Prefabにありません。", MessageType.Warning);
                 return;
             }
             using (new EditorGUI.DisabledScope(true))
@@ -222,19 +228,18 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
         }
 
-        private void DrawDiagnostics(FBXUVBodyOverlayTransferLayer layer)
-        {
-            EditorGUILayout.Space(4f);
-            // A cached result must never survive a change of the inputs.
-            DropStaleResults();
-            if (GUILayout.Button("診断"))
+        private protected override FBXUVMessage Diagnose()
+            => WithProgressBar(() =>
             {
-                diagnosticsLines = WithProgressBar(() => BuildDiagnostics(layer));
-                RememberResultInputs();
-            }
-            if (diagnosticsLines == null) return;
-            EditorGUILayout.HelpBox(string.Join("\n", diagnosticsLines), MessageType.Info);
-        }
+                var lines = BuildDiagnostics(Layer);
+                var text = string.Join("\n", lines);
+                return lines.Count > 0 && lines[0].StartsWith(DiagnosisUnavailablePrefix, System.StringComparison.Ordinal)
+                    ? FBXUVMessage.Warning(text)
+                    : FBXUVMessage.Info(text);
+            });
+
+        // First-line prefix of the "diagnosis could not be made" result; Diagnose() shows it as a Warning.
+        internal const string DiagnosisUnavailablePrefix = "診断できません: ";
 
         internal static List<string> BuildDiagnostics(FBXUVBodyOverlayTransferLayer layer)
         {
@@ -242,7 +247,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             // The correspondence only: a bad pin is a validation error and must not hide the diagnosis of the avatar pair.
             if (!layer.TryPrepareCorrespondence(layer.ResolveCanvasResolution(), out var entry, out var reason))
             {
-                lines.Add("診断できません: " + reason);
+                lines.Add(DiagnosisUnavailablePrefix + reason);
                 return lines;
             }
             var diagnostics = entry.Correspondence.Diagnostics;
@@ -328,29 +333,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             finally
             {
                 EditorUtility.ClearProgressBar();
-            }
-        }
-
-        private void DrawManual(FBXUVBodyOverlayTransferLayer layer)
-        {
-            EditorGUILayout.Space(4f);
-            EditorGUILayout.LabelField("補正ピン", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(serializedObject.FindProperty("manual.enabled"), new GUIContent("補正を有効にする"));
-            if (serializedObject.ApplyModifiedProperties()) InvalidateResults();
-            var count = layer.manual?.pins == null ? 0 : layer.manual.pins.Count;
-            EditorGUILayout.LabelField("ピン数", count.ToString());
-            using (new EditorGUI.DisabledScope(count == 0))
-            {
-                if (GUILayout.Button("すべてリセット") &&
-                    EditorUtility.DisplayDialog("補正ピンのリセット", "すべての補正ピンを削除します。よろしいですか？", "リセット", "キャンセル"))
-                {
-                    Undo.RecordObject(layer, "補正ピンをすべてリセット");
-                    layer.manual.pins.Clear();
-                    EditorUtility.SetDirty(layer);
-                    PrefabUtility.RecordPrefabInstancePropertyModifications(layer);
-                    InvalidateResults();
-                    serializedObject.Update();
-                }
             }
         }
     }

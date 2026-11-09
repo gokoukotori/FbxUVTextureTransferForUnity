@@ -86,8 +86,8 @@ namespace GokouKotori.FBXUVTextureTransfer
 
         public static bool ContainsPoint(FBXUVTriangle triangle, Vector2 point)
         {
-            if (triangle == null || !IsFinite(triangle.a) || !IsFinite(triangle.b)
-                || !IsFinite(triangle.c) || !IsFinite(point)) return false;
+            if (triangle == null || !FBXUVMath.Finite(triangle.a) || !FBXUVMath.Finite(triangle.b)
+                || !FBXUVMath.Finite(triangle.c) || !FBXUVMath.Finite(point)) return false;
 
             // Cast before subtraction so small UV triangles do not lose precision in float arithmetic.
             var acX = (double)triangle.a.x - triangle.c.x;
@@ -107,12 +107,6 @@ namespace GokouKotori.FBXUVTextureTransfer
             var beta = (acX * pcY - acY * pcX) / denominator;
             var gamma = 1.0 - alpha - beta;
             return alpha >= -BarycentricEpsilon && beta >= -BarycentricEpsilon && gamma >= -BarycentricEpsilon;
-        }
-
-        private static bool IsFinite(Vector2 point)
-        {
-            return !float.IsNaN(point.x) && !float.IsInfinity(point.x)
-                && !float.IsNaN(point.y) && !float.IsInfinity(point.y);
         }
 
         private static List<int>[] BuildAdjacency(IReadOnlyList<FBXUVTriangle> triangles)

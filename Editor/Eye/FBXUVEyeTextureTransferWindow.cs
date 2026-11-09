@@ -10,10 +10,11 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
     // Eye transfer: eye list, per-eye configuration, three region picker panes (iris / pupil / target) and manual correction.
     public sealed class FBXUVEyeTextureTransferWindow : FBXUVLayerWindow<FBXUVEyeTextureTransferLayer>
     {
-        private const string WindowTitle = "アイテクスチャ転送";
         private const int IrisPane = 0;
         private const int PupilPane = 1;
         private const int TargetPane = 2;
+        // The settings the panes are shown with while the layer has no eyes; AddEye creates an eye with the same defaults.
+        private static readonly FBXUVEyeBinding NewEye = new FBXUVEyeBinding();
 
         [SerializeField] internal int selectedEye;
         [SerializeField] private int editingTab;
@@ -21,8 +22,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         [NonSerialized] internal readonly Rect[] imageRects = new Rect[3];
         [NonSerialized] internal Rect transferMethodRect;
         [NonSerialized] internal Rect pupilModeRect;
-        [NonSerialized] internal string measurement;
-        [NonSerialized] internal string message;
+        [NonSerialized] internal FBXUVMessage measurement;
         // Layer dirty count when the results were produced; edits of any setting (including the Inspector) bump it.
         [NonSerialized] private int resultsDirtyCount;
         [NonSerialized] private FBXUVRegionPickerPane[] panes;
@@ -38,17 +38,19 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             new FBXUVRegionPickerPane("転送先：目", AnalysisCache)
         };
 
-        protected override string MissingLayerMessage => "設定するEye Transfer Layerを指定してください。";
+        protected override string WindowTitle => FBXUVEditorNames.EyeTransferEditor;
 
-        [MenuItem("Tools/Gokoukotori/FBX UV Texture Transfer/Eye Transfer Editor")]
+        internal static readonly string[] EditingTabLabels = { "1. UV島を選択", "2. 手補正" };
+
+        [MenuItem(FBXUVEditorNames.MenuRoot + FBXUVEditorNames.EyeTransferEditor, priority = 102)]
         public static void Open()
         {
-            GetWindow<FBXUVEyeTextureTransferWindow>(WindowTitle);
+            GetWindow<FBXUVEyeTextureTransferWindow>(FBXUVEditorNames.EyeTransferEditor).AdoptSelectedLayerIfEmpty();
         }
 
         public static void Open(FBXUVEyeTextureTransferLayer layer)
         {
-            var window = GetWindow<FBXUVEyeTextureTransferWindow>(WindowTitle);
+            var window = GetWindow<FBXUVEyeTextureTransferWindow>(FBXUVEditorNames.EyeTransferEditor);
             window.SetLayer(layer);
             window.Show();
             window.Focus();
@@ -73,8 +75,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             manualEditor.Reset();
             eyeList.ClearNameError();
-            measurement = null;
-            message = null;
+            measurement = default;
             syncedEyeCount = -1;
         }
 
@@ -82,8 +83,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             // Eye switches restore the saved values; other refreshes keep the hand-correction editor's previews and selection.
             if (kind == FBXUVRefreshKind.RestoreSaved) manualEditor.Reset();
-            measurement = null;
-            message = null;
+            measurement = default;
             syncedEyeCount = EyeCount();
             selectedEye = Mathf.Clamp(selectedEye, 0, Mathf.Max(0, syncedEyeCount - 1));
             // The hidden pupil pane is synced too, so DetectSavedValueChanges stays quiet.
@@ -107,9 +107,15 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         protected override void DrawContent()
         {
-            if ((measurement != null || message != null) && EditorUtility.GetDirtyCount(Layer) != resultsDirtyCount) ClearResults();
+            if (!measurement.IsEmpty && EditorUtility.GetDirtyCount(Layer) != resultsDirtyCount) ClearResults();
             DrawEyeSelection();
-            if (EyeCount() == 0) return;
+            if (EyeCount() == 0)
+            {
+                // The panes are shown before any eye exists: the first island picked adds one (StoreIsland).
+                EditorGUILayout.HelpBox("目はまだありません。UV島を選ぶと、目を1つ自動で追加します。左右の目が別のUV島なら、もう片方は「目を追加」で追加してください。", MessageType.Info);
+                DrawRegionSelection(NewEye, NewEye.pupilMode == FBXUVEyePupilMode.Separate);
+                return;
+            }
             var eye = CurrentEye();
             if (eye == null)
             {
@@ -118,7 +124,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
             DrawEyeProperties(eye);
             var separatePupil = eye.pupilMode == FBXUVEyePupilMode.Separate;
-            var nextTab = GUILayout.Toolbar(editingTab, new[] { "領域の選択", "手補正" });
+            var nextTab = GUILayout.Toolbar(editingTab, EditingTabLabels);
             if (nextTab != editingTab)
             {
                 manualEditor.Reset();
@@ -142,22 +148,29 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                         eye.pupilOffset = Vector2.zero;
                         eye.pupilScale = eye.pupilAspect = 1;
                     });
-                    message = null;
                     Measure(eye);
                 }
-                if (GUILayout.Button("設定を検証")) Validate();
             }
-            if (measurement != null) EditorGUILayout.HelpBox(measurement, MessageType.Info);
-            if (message != null) EditorGUILayout.HelpBox(message, MessageType.Info);
-            EditorGUILayout.HelpBox("標準Meshから自動計算します。別パーツの瞳孔は縦横比と虹彩に対する投影面積比を保ちます。BlendShape・ポーズ・転送元Shaderの色やUV変形は計測に含めません。", MessageType.None);
+            measurement.Draw();
+            EditorGUILayout.HelpBox("標準のメッシュから自動計算します。別パーツの瞳孔は縦横比と虹彩に対する投影面積比を保ちます。BlendShape・ポーズ・転送元Shaderの色やUV変形は計測に含めません。", MessageType.None);
         }
 
         internal void StoreIsland(int paneIndex, in FBXUVRegionPick pick)
         {
             var eye = CurrentEye();
+            if (eye == null && EyeCount() == 0)
+            {
+                // A layer without eyes gets one with the first island picked, as 「目を追加」 would.
+                AddEye();
+                editingTab = 0;
+                // The eye count is now in sync, so no refresh discards the other panes' pending meshes.
+                syncedEyeCount = EyeCount();
+                for (var index = 0; index < Panes.Length; index++) Panes[index].Sync(SavedRegion(index), FBXUVRefreshKind.PreservePending);
+                eye = CurrentEye();
+            }
             if (eye == null) return;
             var selection = new FBXUVEyeRegion { rendererPath = pick.RendererPath, region = FBXUVRegionFactory.Create(pick, AnalysisCache) };
-            RecordChange("目のUVアイランドを保存", () => {
+            RecordChange("目のUV島を保存", () => {
                 if (paneIndex == IrisPane) eye.iris = selection;
                 else if (paneIndex == PupilPane) eye.pupil = selection;
                 else eye.target = selection;
@@ -207,7 +220,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 Layer.eyes ??= new List<FBXUVEyeBinding>();
                 var number = Layer.eyes.Count + 1;
                 var name = "Eye " + number;
-                while (Layer.eyes.Any(e => e?.name == name)) name = "Eye " + (++number);
+                while (Layer.eyes.Any(e => FBXUVEntryListControl.NamesEqual(e?.name, name))) name = "Eye " + (++number);
                 Layer.eyes.Add(new FBXUVEyeBinding { name = name });
             });
             eyeList.ClearNameError();
@@ -333,24 +346,17 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             Repaint();
         }
 
-        internal void Validate()
-        {
-            var issues = FBXUVEyeTransferValidation.ValidateLayer(Layer);
-            message = issues.Count == 0 ? "設定は有効です。TTTプレビューで転写結果を確認してください。" : string.Join("\n", issues.Select(i => i.Message));
-            resultsDirtyCount = EditorUtility.GetDirtyCount(Layer);
-        }
-
         internal void Measure(FBXUVEyeBinding eye)
         {
             try
             {
                 var mapping = FBXUVEyeMapping.Create(Layer.sourceModelOrPrefab, Layer.targetModelOrPrefab, eye, new FBXUVMeshAnalysisCache());
-                measurement = string.Join("\n", mapping.AllParts.Select((part, i) =>
-                    (mapping.Parts == null ? "" : $"領域 {i + 1}: ") + Measurement(part, eye)));
+                measurement = FBXUVMessage.Info(string.Join("\n", mapping.AllParts.Select((part, i) =>
+                    (mapping.Parts == null ? "" : $"領域 {i + 1}: ") + Measurement(part, eye))));
             }
             catch (Exception e)
             {
-                measurement = e.Message;
+                measurement = FBXUVMessage.Warning(e.Message);
             }
             resultsDirtyCount = EditorUtility.GetDirtyCount(Layer);
         }
@@ -370,11 +376,10 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 + $"虹彩に対する幅・高さ: {mapping.MeasuredSize.x:P2} / {mapping.MeasuredSize.y:P2}　縦横比（幅÷高さ）: {mapping.MeasuredAspect:F4}";
         }
 
-        // Measurement and validation results describe the previous configuration.
+        // The measurement describes the previous configuration.
         private void ClearResults()
         {
-            measurement = null;
-            message = null;
+            measurement = default;
         }
 
         private int EyeCount() => Layer == null || Layer.eyes == null ? 0 : Layer.eyes.Count;

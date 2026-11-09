@@ -8,7 +8,15 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 {
     internal sealed class FBXUVEyeManualEditor : IDisposable
     {
+        internal int Tool => tool;
         internal readonly Rect[] imageScreenRects = new Rect[2];
+        internal readonly FBXUVPreviewViewport[] Viewports = { new FBXUVPreviewViewport(), new FBXUVPreviewViewport() };
+
+        // Resets both images to the whole texture.
+        internal void ShowAllImages()
+        {
+            foreach (var viewport in Viewports) viewport.ShowAll();
+        }
         private string state, error;
         private FBXUVEyeMapping baselineMap;
         private FBXUVEyeManualWarp coordinates, previewWarp;
@@ -18,8 +26,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         private RenderTexture before, after;
         private int selected = -1, tool, dragControl;
         private bool validDraft, showPins = true, showOutline = true, showGrid, compare;
-        private readonly Vector2[] centers = { Vector2.one * .5f, Vector2.one * .5f };
-        private readonly float[] zoom = { 1, 1 };
         private FBXUVEyeTextureTransferLayer layer;
         private FBXUVEyeBinding eye;
         private Action changed, repaint;
@@ -32,14 +38,18 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             var settings = draft ?? eye.manual ?? new FBXUVEyeManualSettings();
             using (new EditorGUI.DisabledScope(dragControl != 0))
             {
-                var enabled = EditorGUILayout.ToggleLeft("手補正を有効にする", settings.enabled);
+                var enabled = EditorGUILayout.ToggleLeft(FBXUVManualCorrectionLabels.Enable, settings.enabled);
                 if (enabled != settings.enabled)
                 {
                     var candidate = settings.Copy(); candidate.enabled = enabled;
                     var rendered = TryPreview(candidate);
                     if (!enabled || rendered) Commit(candidate);
                 }
-                tool = GUILayout.Toolbar(tool, new[] { "移動", "補正ピンを追加", "固定ピンを追加" });
+                // Without pins the tools stay usable: the first pin turns the correction on.
+                var locked = !CanAddPins(settings);
+                if (locked) tool = 0;
+                using (new EditorGUI.DisabledScope(locked)) tool = GUILayout.Toolbar(tool, FBXUVManualCorrectionLabels.Tools);
+                if (locked) EditorGUILayout.HelpBox(FBXUVManualCorrectionLabels.PinsLockedMessage, MessageType.Info);
             }
             EditorGUILayout.HelpBox(eye.pupilMode == FBXUVEyePupilMode.Separate
                 ? "虹彩を補正中。目の外周と別パーツの瞳孔は固定です。瞳孔は下の「自動配置からの調整」で変更します。"
@@ -49,26 +59,37 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     DrawImage(0, "転送元・虹彩", layer.sourceTexture, width);
-                    DrawImage(1, compare ? "Eyeレイヤー・手補正前" : "Eyeレイヤー・補正結果", compare ? before : after, width);
+                    DrawImage(1, compare ? "手補正前" : "補正結果", compare ? before : after, width);
                 }
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    showOutline = GUILayout.Toggle(showOutline, "輪郭"); showPins = GUILayout.Toggle(showPins, "ピン");
+                    showOutline = GUILayout.Toggle(showOutline, FBXUVManualCorrectionLabels.Outline); showPins = GUILayout.Toggle(showPins, "ピン");
                     showGrid = GUILayout.Toggle(showGrid, "変形の格子");
-                    compare = GUILayout.RepeatButton("押している間は手補正前");
+                    compare = GUILayout.RepeatButton(FBXUVManualCorrectionLabels.Compare);
+                    if (GUILayout.Button("全体")) ShowAllImages();
                     if (GUILayout.Button("目を拡大")) FrameEyes();
                 }
                 DrawSelected(settings);
             }
             if (!string.IsNullOrEmpty(error)) EditorGUILayout.HelpBox("未反映：" + error, MessageType.Warning);
-            using (new EditorGUI.DisabledScope(dragControl != 0))
-                if (GUILayout.Button("手補正をすべてリセット"))
-                {
-                    var candidate = new FBXUVEyeManualSettings { enabled = settings.enabled };
-                    candidate.BindRegions(eye); TryPreview(candidate);
-                    selected = -1; Commit(candidate);
-                }
-            EditorGUILayout.HelpBox("結果画像でクリックしてピンを追加し、ドラッグで移動します。元画像側では補正ピンの参照位置を調整できます。固定ピンは現在の一点を保持します。スクロールで拡大、中ボタンで移動。Escでドラッグを取り消します。\n表示は選択したEyeレイヤー単体です。他レイヤー・Shaderを含む仕上がりはTTTプレビューで確認してください。", MessageType.None);
+            using (new EditorGUI.DisabledScope(dragControl != 0 || (settings.pins?.Count ?? 0) == 0))
+                if (GUILayout.Button(FBXUVManualCorrectionLabels.ResetAll)) RequestResetAll();
+            EditorGUILayout.HelpBox("結果画像でクリックしてピンを追加し、ドラッグで移動します。最初のピンを追加すると手補正が有効になります。元画像側では補正ピンの参照位置を調整できます。固定ピンは現在の一点を保持します。スクロールで拡大、中ボタンで移動。Escでドラッグを取り消します。\n表示はこのレイヤー単体です。他レイヤー・Shaderを含む仕上がりはTexTransTool のプレビューで確認してください。", MessageType.None);
+        }
+
+        private static bool CanAddPins(FBXUVEyeManualSettings settings) => settings.enabled || settings.pins == null || settings.pins.Count == 0;
+
+        // The button's entry point: nothing saved or a drag in progress does nothing; otherwise asks first. Use after Draw.
+        internal bool RequestResetAll()
+        {
+            if (layer == null || eye == null || dragControl != 0) return false;
+            var saved = eye.manual;
+            var count = saved?.pins?.Count ?? 0;
+            if (count == 0 || !FBXUVResetConfirmation.Confirm(count)) return false;
+            var candidate = new FBXUVEyeManualSettings { enabled = saved.enabled };
+            candidate.BindRegions(eye); TryPreview(candidate);
+            selected = -1; Commit(candidate);
+            return true;
         }
 
         private void Prepare()
@@ -104,7 +125,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             var rt = new RenderTexture(texture == null ? 512 : Mathf.Max(1, Mathf.RoundToInt(texture.width * scale)),
                 texture == null ? 512 : Mathf.Max(1, Mathf.RoundToInt(texture.height * scale)), 0,
                 RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear)
-                { enableRandomWrite = true, hideFlags = HideFlags.HideAndDontSave, name = "Eye手補正プレビュー" };
+                { enableRandomWrite = true, hideFlags = HideFlags.HideAndDontSave, name = "手補正プレビュー" };
             try
             {
                 if (layer.sourceTexture == null || layer.ResolveEyeShader() == null || layer.ResolvePixelProcessShader() == null
@@ -133,7 +154,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         internal static void SaveSettings(FBXUVEyeTextureTransferLayer owner, FBXUVEyeBinding binding, FBXUVEyeManualSettings settings)
         {
-            Undo.RecordObject(owner, "Eye手補正を変更");
+            Undo.RecordObject(owner, "手補正を変更");
             binding.manual = settings.Copy();
             EditorUtility.SetDirty(owner); PrefabUtility.RecordPrefabInstancePropertyModifications(owner);
         }
@@ -168,12 +189,12 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             using (new EditorGUILayout.HorizontalScope())
             {
                 using (new EditorGUI.DisabledScope(pin.fixedPoint))
-                    if (GUILayout.Button("このピンの移動を戻す"))
+                    if (GUILayout.Button(FBXUVManualCorrectionLabels.ResetMove))
                     {
                         var candidate = settings.Copy(); candidate.pins[selected].position = pin.origin;
                         if (TryPreview(candidate)) Commit(candidate);
                     }
-                if (GUILayout.Button("ピンを削除"))
+                if (GUILayout.Button(FBXUVManualCorrectionLabels.DeletePin))
                 {
                     var candidate = settings.Copy(); candidate.pins.RemoveAt(selected);
                     if (TryPreview(candidate) || candidate.pins.Count == 0) { selected = -1; Commit(candidate); }
@@ -191,9 +212,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 GUI.BeginGroup(rect);
                 var local = new Rect(Vector2.zero, rect.size);
                 EditorGUI.DrawRect(local, new Color(.16f, .16f, .16f));
-                var size = Mathf.Min(rect.width, rect.height) * zoom[index];
-                var image = new Rect(rect.width * .5f - centers[index].x * size,
-                    rect.height * .5f - (1 - centers[index].y) * size, size, size);
+                var image = Viewports[index].ImageRect(local);
                 imageScreenRects[index] = new Rect(GUIUtility.GUIToScreenPoint(image.position), image.size);
                 if (texture != null) GUI.DrawTexture(image, texture, ScaleMode.StretchToFill, true);
                 if (Event.current.type == EventType.Repaint)
@@ -308,7 +327,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
             if (e.type == EventType.MouseDrag && dragControl == control)
             {
-                var uv = ToUv(image, e.mousePosition);
+                var uv = FBXUVPreviewViewport.ToUv(image, e.mousePosition);
                 Vector2 point;
                 var coordinates = Coordinates(draft.pins[selected]);
                 var located = index == 0 ? coordinates.TryPointFromSourceUv(uv, out point) : coordinates.TryTargetPoint(uv, out point);
@@ -321,18 +340,20 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 e.Use(); repaint(); return;
             }
             if (!rect.Contains(e.mousePosition)) return;
-            if (e.type == EventType.ScrollWheel && dragControl == 0)
-            { zoom[index] = Mathf.Clamp(zoom[index] * Mathf.Exp(-e.delta.y * .12f), 1, 64); e.Use(); repaint(); }
-            else if (e.type == EventType.MouseDrag && e.button == 2 && dragControl == 0)
-            { centers[index] += new Vector2(-e.delta.x, e.delta.y) / image.width; e.Use(); repaint(); }
-            else if (e.type == EventType.MouseDown && e.button == 0 && dragControl == 0 && !compare && eye.manual?.enabled == true)
+            // Wheel and middle-drag are navigation; HandleInput ignores them while a pin drag holds the hot control.
+            if (Viewports[index].HandleInput(rect)) repaint();
+            else if (e.type == EventType.MouseDown && e.button == 0 && dragControl == 0 && !compare)
             {
-                var settings = eye.manual;
-                if (tool != 0 && index == 1)
+                var settings = eye.manual ?? new FBXUVEyeManualSettings();
+                var adding = tool != 0 && index == 1 && CanAddPins(settings);
+                // The first pin turns the correction on. With saved pins, the switch stays where the user put it.
+                if (!settings.enabled && !adding) return;
+                if (adding)
                 {
-                    if (LocateTarget(ToUv(image, e.mousePosition), out var point) && coordinates.CanPlace(point))
+                    if (LocateTarget(FBXUVPreviewViewport.ToUv(image, e.mousePosition), out var point) && coordinates.CanPlace(point))
                     {
                         var candidate = settings.Copy();
+                        candidate.enabled = true;
                         if (candidate.pins.Count == 0) candidate.BindRegions(eye);
                         candidate.pins.Add(new FBXUVEyeManualPin { position = point, origin = previewWarp?.Inverse(point) ?? point, fixedPoint = tool == 2, targetComponent = activePart });
                         if (TryPreview(candidate)) { selected = candidate.pins.Count - 1; tool = 0; Commit(candidate); }
@@ -364,17 +385,12 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (layer != null && eye != null && baselineMap != null) TryPreview(eye.manual ?? new FBXUVEyeManualSettings());
         }
 
-        private void FrameEyes()
+        internal void FrameEyes()
         {
-            var regions = new[] { eye.iris.region, eye.target.region };
-            for (var i = 0; i < 2; i++)
-            {
-                centers[i] = regions[i].bounds.Center;
-                zoom[i] = Mathf.Clamp(.8f / Mathf.Max(regions[i].bounds.Width, regions[i].bounds.Height), 1, 64);
-            }
+            Viewports[0].Frame(eye.iris.region.bounds);
+            Viewports[1].Frame(eye.target.region.bounds);
         }
 
-        private static Vector2 ToUv(Rect r, Vector2 p) => new Vector2((p.x - r.x) / r.width, 1 - (p.y - r.y) / r.height);
         private static void Destroy(RenderTexture rt) { if (rt != null) { rt.Release(); Object.DestroyImmediate(rt); } }
         internal void Reset()
         {

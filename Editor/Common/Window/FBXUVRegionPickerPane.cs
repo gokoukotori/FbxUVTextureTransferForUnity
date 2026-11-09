@@ -34,7 +34,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         private const string NoIslandAtPositionMessage = "この位置にUV島はありません。";
         private const string NotInCandidatesMessage = "現在のModel / Prefab候補からメッシュを選択してください。";
         private const string PendingMessage = "未確定：島をクリックまたは選択して保存してください";
-        private const string HashMismatchMessage = "メッシュ内容が保存時と異なります。UV島を選び直してください。";
+        private const string HashMismatchMessage = "メッシュの内容が保存時と異なります。UV島を選び直してください。";
         private static readonly Color backgroundColor = new Color(.12f, .12f, .12f);
 
         private readonly string title;
@@ -247,7 +247,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         private FBXUVRegionPick? DrawPreview(FBXUVPaneContext context)
         {
-            var rect = GUILayoutUtility.GetRect(context.Size, context.Size, GUILayout.ExpandWidth(false));
+            // An integer side keeps the rect exactly square; layout rounding of a fractional size made width and height differ.
+            var side = Mathf.Floor(context.Size);
+            var rect = GUILayoutUtility.GetRect(side, side, GUILayout.ExpandWidth(false));
             var repaint = Event.current.type == EventType.Repaint;
             if (repaint)
             {

@@ -45,7 +45,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
 
             if (!status.IsUnityBackend)
             {
-                Add(issues, "TexTransTool の backend が WGPU です。このLayerは Unity backendだけをサポートします。", contextObject);
+                Add(issues, "TexTransTool の backend が WGPU です。このレイヤーは Unity backendだけをサポートします。", contextObject);
             }
         }
 

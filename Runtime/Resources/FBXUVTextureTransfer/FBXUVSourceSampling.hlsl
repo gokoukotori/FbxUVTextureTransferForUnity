@@ -1,6 +1,8 @@
 #ifndef FBXUV_SOURCE_SAMPLING_INCLUDED
 #define FBXUV_SOURCE_SAMPLING_INCLUDED
 
+#include "FBXUVColor.hlsl"
+
 Texture2D<float4> _MainTex;
 StructuredBuffer<float4> _SourceTriangles;
 StructuredBuffer<int2> _SourceCellRanges;
@@ -8,11 +10,6 @@ StructuredBuffer<int> _SourceCellIndices;
 int _SourceGridSize;
 float4 _SourceBounds, _SourceSize;
 float _RestoreSRGB;
-
-float GammaFromLinear(float value)
-{
-    return value <= 0.0031308 ? value * 12.92 : 1.055 * pow(max(value, 0.0), 1.0 / 2.4) - 0.055;
-}
 
 bool SourceContains(float2 uv)
 {
@@ -51,6 +48,19 @@ float4 LoadPremultiplied(int2 pixel)
         color.rgb = float3(GammaFromLinear(color.r), GammaFromLinear(color.g), GammaFromLinear(color.b));
     color.rgb *= color.a;
     return color;
+}
+
+// Bilinear filter of the premultiplied, masked source texels at source UV, returned as straight RGBA
+// because ExternalToolAsLayer consumes straight RGBA.
+float4 SampleSourceStraight(float2 source)
+{
+    float2 pixel = source * _SourceSize.xy - 0.5;
+    int2 origin = int2(floor(pixel));
+    float2 weight = frac(pixel);
+    float4 lower = lerp(LoadPremultiplied(origin), LoadPremultiplied(origin + int2(1, 0)), weight.x);
+    float4 upper = lerp(LoadPremultiplied(origin + int2(0, 1)), LoadPremultiplied(origin + int2(1, 1)), weight.x);
+    float4 color = lerp(lower, upper, weight.y);
+    return color.a > 0.0 ? float4(color.rgb / color.a, color.a) : 0;
 }
 
 #endif

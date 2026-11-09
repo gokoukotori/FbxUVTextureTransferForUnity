@@ -128,7 +128,7 @@ namespace GokouKotori.FBXUVTextureTransfer
                 if (mesh.GetTopology(subMeshIndex) != MeshTopology.Triangles)
                 {
                     throw new ArgumentException(
-                        "指定されたsubmeshのtopologyはTrianglesではありません。",
+                        "指定されたサブメッシュは三角形のメッシュではありません。",
                         nameof(subMeshIndex));
                 }
 
@@ -138,7 +138,7 @@ namespace GokouKotori.FBXUVTextureTransfer
                 if (uvs.Count != vertexCount)
                 {
                     throw new ArgumentException(
-                        "指定されたUV channelには全頂点分のUVがありません。",
+                        "指定されたUVチャンネルには全頂点分のUVがありません。",
                         nameof(uvChannel));
                 }
 

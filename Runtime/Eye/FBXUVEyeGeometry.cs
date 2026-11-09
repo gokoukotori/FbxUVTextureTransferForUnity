@@ -52,20 +52,13 @@ namespace GokouKotori.FBXUVTextureTransfer
         internal static Renderer ResolveRenderer(GameObject root, FBXUVEyeRegion selection)
         {
             if (root == null || selection?.region?.mesh == null || selection.rendererPath == null)
-                throw new ArgumentException("Model / Prefab とUVアイランドを選択してください。");
+                throw new ArgumentException("Model / Prefab とUV島を選択してください。");
             var matches = FBXUVRendererMeshUtility.Collect(root).Where(item =>
-                Path(root.transform, item.Renderer.transform) == selection.rendererPath && item.Mesh == selection.region.mesh)
+                FBXUVRendererMeshUtility.RelativePath(root.transform, item.Renderer.transform) == selection.rendererPath && item.Mesh == selection.region.mesh)
                 .Select(item => item.Renderer).ToArray();
             if (matches.Length != 1)
-                throw new ArgumentException("選択したRendererを一意に取得できません。UVアイランドを選択し直してください。");
+                throw new ArgumentException("選択したRendererを一意に取得できません。UV島を選び直してください。");
             return matches[0];
-        }
-
-        internal static string Path(Transform root, Transform item)
-        {
-            var names = new Stack<string>();
-            while (item != root && item != null) { names.Push(item.name); item = item.parent; }
-            return string.Join("/", names);
         }
 
         internal static FBXUVEyeGeometry Read(GameObject root, FBXUVEyeRegion selection, FBXUVMeshAnalysisCache cache)
@@ -73,7 +66,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             var renderer = ResolveRenderer(root, selection);
             var region = selection.region;
             if (!FBXUVMeshUtility.IsMeshHashCurrent(region, cache) || region.triangles == null || region.triangles.Count == 0)
-                throw new ArgumentException("MeshまたはUVが変更されています。UVアイランドを選択し直してください。");
+                throw new ArgumentException("メッシュまたはUVが変更されています。UV島を選び直してください。");
             var live = cache.Get(region.mesh, region.subMeshIndex, region.uvChannel).GetTriangles();
             var indices = region.mesh.GetTriangles(region.subMeshIndex);
             var vertices = region.mesh.vertices;
@@ -85,14 +78,14 @@ namespace GokouKotori.FBXUVTextureTransfer
             foreach (var triangle in region.triangles)
             {
                 if (triangle == null || triangle.index < 0 || triangle.index >= live.Count || !seen.Add(triangle.index))
-                    throw new ArgumentException("UVアイランドの三角形が無効です。");
+                    throw new ArgumentException("UV島の三角形が無効です。");
                 for (var k = 0; k < 3; k++)
                 {
                     var uv = triangle.GetPoint(k);
                     if (!FBXUVMakeupWarp.IsUnitUv(uv) || (uv - live[triangle.index].GetPoint(k)).sqrMagnitude > 1e-12f)
-                        throw new ArgumentException("保存されたUVがMeshと一致しません。アイランドを選択し直してください。");
+                        throw new ArgumentException("保存されたUVがメッシュと一致しません。UV島を選び直してください。");
                     var p = matrix.MultiplyPoint3x4(vertices[indices[triangle.index * 3 + k]]);
-                    if (!Finite(p.x) || !Finite(p.y) || !Finite(p.z)) throw new ArgumentException("Meshの座標が不正です。");
+                    if (!FBXUVMath.Finite(p.x) || !FBXUVMath.Finite(p.y) || !FBXUVMath.Finite(p.z)) throw new ArgumentException("メッシュの座標が不正です。");
                     tris.Add(points.Count); points.Add(p); uvs.Add(uv);
                 }
             }
@@ -198,8 +191,6 @@ namespace GokouKotori.FBXUVTextureTransfer
             for (var i = 0; i < loop.Length; i++) area += Vector3.Cross(loop[i] - loop[0], loop[(i + 1) % loop.Length] - loop[0]);
             return area;
         }
-
-        internal static bool Finite(float f) => !float.IsNaN(f) && !float.IsInfinity(f);
     }
 
     internal sealed class FBXUVEyeFrame
@@ -240,7 +231,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             {
                 var a = frame.Contour[i]; var b = frame.Contour[(i + 1) % frame.Contour.Length];
                 var cross = Cross(a, b);
-                if (cross <= 1e-8f) throw new ArgumentException("目の輪郭を中心から一方向に対応付けできません。別のアイランドを選択してください。");
+                if (cross <= 1e-8f) throw new ArgumentException("目の輪郭を中心から一方向に対応付けできません。別のUV島を選択してください。");
                 totalAngle += Mathf.Atan2(cross, Vector2.Dot(a, b));
             }
             if (Mathf.Abs(totalAngle - 2 * Mathf.PI) > .001f) throw new ArgumentException("目の輪郭が自己交差しています。");
@@ -326,9 +317,9 @@ namespace GokouKotori.FBXUVTextureTransfer
                 || !Enum.IsDefined(typeof(FBXUVEyePupilMode), binding.pupilMode))
                 throw new ArgumentException("補正方式または瞳孔の構成が無効です。");
             var separatePupil = binding.pupilMode == FBXUVEyePupilMode.Separate;
-            if (separatePupil && (!FBXUVEyeGeometry.Finite(binding.pupilScale) || binding.pupilScale <= 0
-                || !FBXUVEyeGeometry.Finite(binding.pupilAspect) || binding.pupilAspect <= 0
-                || !FBXUVEyeGeometry.Finite(binding.pupilOffset.x) || !FBXUVEyeGeometry.Finite(binding.pupilOffset.y)))
+            if (separatePupil && (!FBXUVMath.Finite(binding.pupilScale) || binding.pupilScale <= 0
+                || !FBXUVMath.Finite(binding.pupilAspect) || binding.pupilAspect <= 0
+                || !FBXUVMath.Finite(binding.pupilOffset.x) || !FBXUVMath.Finite(binding.pupilOffset.y)))
                 throw new ArgumentException("瞳孔の倍率・縦横比には正の有限値、位置には有限値を指定してください。");
             var irises = FBXUVEyeGeometry.Read(source, binding.iris, cache).Split();
             var pupils = separatePupil ? FBXUVEyeGeometry.Read(source, binding.pupil, cache).Split() : null;
@@ -336,7 +327,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             if (separatePupil && binding.iris.rendererPath == binding.pupil.rendererPath && binding.iris.region.mesh == binding.pupil.region.mesh
                 && binding.iris.region.subMeshIndex == binding.pupil.region.subMeshIndex
                 && binding.iris.region.triangles.Select(t => t.index).Intersect(binding.pupil.region.triangles.Select(t => t.index)).Any())
-                throw new ArgumentException("虹彩と瞳孔には別の面を選択してください。同じアイランドは使用できません。");
+                throw new ArgumentException("虹彩と瞳孔には別の面を選択してください。同じUV島は使用できません。");
             var sourceCenters = NormalizedCenters(irises);
             var targetCenters = NormalizedCenters(targets);
             var maps = new FBXUVEyeMapping[targets.Length];
@@ -404,7 +395,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             var separatePupil = binding.pupilMode == FBXUVEyePupilMode.Separate;
             var map = new FBXUVEyeMapping { Iris = iris, Pupil = pupil, Target = target, PartIndex = partIndex, PartCount = partCount };
             if (map.Target.Loops.Count != 1 || (separatePupil && map.Pupil.Loops.Count != 1))
-                throw new ArgumentException("瞳孔と転送先には穴のないアイランドを指定してください。");
+                throw new ArgumentException("瞳孔と転送先には穴のないUV島を指定してください。");
             map.SourceFrame = FBXUVEyeFrame.Create(map.Iris); map.TargetFrame = FBXUVEyeFrame.Create(map.Target);
             ValidateProjection(map.Iris, map.SourceFrame, "虹彩");
             if (separatePupil) ValidateProjection(map.Pupil, map.SourceFrame, "瞳孔");
@@ -420,7 +411,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             var min = projected.Aggregate(Vector2.Min); var max = projected.Aggregate(Vector2.Max);
             map.SourcePupilCenter = (min + max) * .5f;
             if (map.SourcePupilCenter.magnitude > map.SourceFrame.Radius(map.SourcePupilCenter))
-                throw new ArgumentException("瞳孔の中心が虹彩の外側にあります。同じ目のアイランドを選択してください。");
+                throw new ArgumentException("瞳孔の中心が虹彩の外側にあります。同じ目のUV島を選択してください。");
             map.MeasuredCenter = map.SourcePupilCenter * .5f + Vector2.one * .5f;
             map.MeasuredSize = (max - min) * .5f;
             map.MeasuredAspect = (max.x - min.x) * map.SourceFrame.Half.x / ((max.y - min.y) * map.SourceFrame.Half.y);
@@ -430,11 +421,11 @@ namespace GokouKotori.FBXUVTextureTransfer
             map.PupilScale = new Vector2(scale * aspect * map.SourceFrame.Half.x / map.TargetFrame.Half.x,
                 scale / aspect * map.SourceFrame.Half.y / map.TargetFrame.Half.y);
             map.TargetPupilCenter = map.SourceFrame.MapTo(map.TargetFrame, map.SourcePupilCenter) + binding.pupilOffset * 2;
-            if (!FBXUVEyeGeometry.Finite(map.MeasuredAspect) || map.MeasuredAspect <= 0)
+            if (!FBXUVMath.Finite(map.MeasuredAspect) || map.MeasuredAspect <= 0)
                 throw new ArgumentException("瞳孔の縦横比を計測できません。");
-            if (!FBXUVEyeGeometry.Finite(map.PupilScale.x) || !FBXUVEyeGeometry.Finite(map.PupilScale.y)
+            if (!FBXUVMath.Finite(map.PupilScale.x) || !FBXUVMath.Finite(map.PupilScale.y)
                 || map.PupilScale.x <= 0 || map.PupilScale.y <= 0
-                || !FBXUVEyeGeometry.Finite(map.TargetPupilCenter.x) || !FBXUVEyeGeometry.Finite(map.TargetPupilCenter.y))
+                || !FBXUVMath.Finite(map.TargetPupilCenter.x) || !FBXUVMath.Finite(map.TargetPupilCenter.y))
                 throw new ArgumentException("瞳孔の補正値が計算できる範囲を超えています。");
             if (binding.transferMethod == FBXUVEyeTransferMethod.Topology) FBXUVEyeTopology.Apply(map, binding);
             map.ManualWarp = FBXUVEyeManualWarp.Create(map, binding);

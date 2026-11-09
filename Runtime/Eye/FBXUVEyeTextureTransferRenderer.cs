@@ -58,7 +58,7 @@ namespace GokouKotori.FBXUVTextureTransfer
                                 mesh.triangles = mapping.Target.Triangles;
                                 material.SetVector("_OutputSize", new Vector4(scratch.width, scratch.height, 0, 0));
                                 Graphics.SetRenderTarget(scratch); GL.sRGBWrite = false;
-                                if (!material.SetPass(0)) throw new InvalidOperationException("Eye転送Shaderの描画passを利用できません。");
+                                if (!material.SetPass(0)) throw new InvalidOperationException("アイ転送用Shaderの描画passを利用できません。");
                                 Graphics.DrawMeshNow(mesh, Matrix4x4.identity);
                             }
                             // Shared UVs describe one output texel, even when several spatial parts use it.

@@ -22,7 +22,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             if (mapping == null) throw new ArgumentNullException(nameof(mapping));
             var warp = mapping.Warp;
             if (layer.makeupTexture == null || layer.targetRegion == null || layer.sourceRegion == null)
-                throw new ArgumentException("メイクTextureと転送元・転送先Regionが必要です。");
+                throw new ArgumentException("メイクの透過PNGと転送元・転送先の顔のUV島が必要です。");
             var shader = layer.ResolveTransferShader();
             if (shader == null || !shader.isSupported) throw new InvalidOperationException("メイク転送Shaderを利用できません。");
             RenderResources resources = null;
@@ -108,8 +108,8 @@ namespace GokouKotori.FBXUVTextureTransfer
                     GpuPoints = mapping.Warp.GetGpuPoints();
                     if (retain)
                     {
-                        sourceTriangles = FBXUVMakeupComputationCache.CopyTriangles(layer.sourceRegion.triangles);
-                        targetTriangles = FBXUVMakeupComputationCache.CopyTriangles(layer.targetRegion.triangles);
+                        sourceTriangles = FBXUVTriangleSnapshot.Copy(layer.sourceRegion.triangles);
+                        targetTriangles = FBXUVTriangleSnapshot.Copy(layer.targetRegion.triangles);
                         liveResources.Add(this);
                     }
                 }
@@ -119,8 +119,8 @@ namespace GokouKotori.FBXUVTextureTransfer
             internal bool Matches(FBXUVMakeupTransferLayer layer, FBXUVMakeupMapping current, Shader shader)
             {
                 return Material != null && Mesh != null && Material.shader == shader && ReferenceEquals(mapping, current)
-                    && FBXUVMakeupComputationCache.SameTriangles(sourceTriangles, layer.sourceRegion.triangles)
-                    && FBXUVMakeupComputationCache.SameTriangles(targetTriangles, layer.targetRegion.triangles);
+                    && FBXUVTriangleSnapshot.Same(sourceTriangles, layer.sourceRegion.triangles)
+                    && FBXUVTriangleSnapshot.Same(targetTriangles, layer.targetRegion.triangles);
             }
 
             public void Dispose()

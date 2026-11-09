@@ -52,7 +52,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             avatarRoot = null;
             if (layer == null)
             {
-                error = "FBX UV Texture Transfer Layer がありません。";
+                error = "レイヤーがありません。";
                 return false;
             }
 
@@ -135,11 +135,11 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 case FBXUVAvatarRootResolutionStatus.NestedAvatarDescriptors:
                     return "親階層に複数の VRCAvatarDescriptor があります。";
                 case FBXUVAvatarRootResolutionStatus.NdmfAvatarRootNotFound:
-                    return "NDMF が Avatar Root を特定できません。";
+                    return "NDMF がアバターを特定できません。";
                 case FBXUVAvatarRootResolutionStatus.NdmfAvatarRootMismatch:
-                    return "VRCAvatarDescriptor の GameObject と NDMF Avatar Root が一致しません。";
+                    return "VRCAvatarDescriptor の GameObject と NDMF が特定したアバターが一致しません。";
                 default:
-                    return "Avatar Root を特定できません。";
+                    return "アバターを特定できません。";
             }
         }
     }

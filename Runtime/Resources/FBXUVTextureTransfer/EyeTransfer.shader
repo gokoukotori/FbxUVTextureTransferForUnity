@@ -12,6 +12,7 @@ Shader "Hidden/FBXUVTextureTransfer/EyeTransfer"
             #pragma vertex Vert
             #pragma fragment Frag
             #include "UnityCG.cginc"
+            #include "FBXUVColor.hlsl"
             Texture2D<float4> _MainTex;
             StructuredBuffer<float4> _IrisTriangles, _PupilTriangles, _OcclusionTriangles;
             StructuredBuffer<int2> _IrisRanges, _PupilRanges, _OcclusionRanges;
@@ -75,11 +76,10 @@ Shader "Hidden/FBXUVTextureTransfer/EyeTransfer"
                 }
                 return found;
             }
-            float Gamma(float value) { return value <= .0031308 ? value * 12.92 : 1.055 * pow(max(value, 0), 1.0 / 2.4) - .055; }
             float4 Load(Texture2D<float4> tex, int2 pixel, int2 size, float restore)
             {
                 float4 c = tex.Load(int3(clamp(pixel, 0, size - 1), 0));
-                if (restore > .5) c.rgb = float3(Gamma(c.r), Gamma(c.g), Gamma(c.b));
+                if (restore > .5) c.rgb = float3(GammaFromLinear(c.r), GammaFromLinear(c.g), GammaFromLinear(c.b));
                 c.rgb *= c.a; return c;
             }
             float4 Sample(Texture2D<float4> tex, float2 uv, float restore)

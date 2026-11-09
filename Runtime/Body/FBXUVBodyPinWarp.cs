@@ -135,8 +135,8 @@ namespace GokouKotori.FBXUVTextureTransfer
             for (var k = 0; k < pins.Count; k++)
             {
                 var pin = pins[k];
-                if (pin == null || !Finite(pin.origin.x) || !Finite(pin.origin.y) || !Finite(pin.position.x) || !Finite(pin.position.y)
-                    || !Finite(pin.radius) || !(pin.radius > 0f))
+                if (pin == null || !FBXUVMath.Finite(pin.origin.x) || !FBXUVMath.Finite(pin.origin.y) || !FBXUVMath.Finite(pin.position.x) || !FBXUVMath.Finite(pin.position.y)
+                    || !FBXUVMath.Finite(pin.radius) || !(pin.radius > 0f))
                     return "補正ピン " + (k + 1) + " の値が不正です。";
             }
             return null;
@@ -285,7 +285,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             point = Interpolate(map.Target.Positions, map.Target.Triangles, triangle, bary);
             normal = FBXUVBodySpatialGrid.Normalize(Interpolate(map.Target.Normals, map.Target.Triangles, triangle, bary));
             if (normal == Vector3.zero) normal = map.TargetNormals[index];
-            return Finite(point.x) && Finite(point.y) && Finite(point.z);
+            return FBXUVMath.Finite(point.x) && FBXUVMath.Finite(point.y) && FBXUVMath.Finite(point.z);
         }
 
         // The covered texel that contains uv, or -1 (off the map or off every island). A texel is covered when its centre is on
@@ -296,7 +296,7 @@ namespace GokouKotori.FBXUVTextureTransfer
         private static int OriginTexel(FBXUVBodyCorrespondence map, Vector2 uv)
         {
             var resolution = map.Resolution;
-            if (!Finite(uv.x) || !Finite(uv.y)) return -1;
+            if (!FBXUVMath.Finite(uv.x) || !FBXUVMath.Finite(uv.y)) return -1;
             var x = Mathf.FloorToInt(uv.x * resolution);
             var y = Mathf.FloorToInt(uv.y * resolution);
             if (x < 0 || y < 0 || x >= resolution || y >= resolution) return -1;
@@ -343,7 +343,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             var tangent = u - Vector3.Dot(u, normal) * normal;
             if (!Snap(map, point - tangent, normal, tangent.magnitude, radius, out _, out _, out var triangle, out var bary)) return false;
             var found = Interpolate(map.Target.Uvs, map.Target.Triangles, triangle, bary);
-            if (!Finite(found.x) || !Finite(found.y)) return false;
+            if (!FBXUVMath.Finite(found.x) || !FBXUVMath.Finite(found.y)) return false;
             origin = found;
             return true;
         }
@@ -443,7 +443,5 @@ namespace GokouKotori.FBXUVTextureTransfer
         }
 
         private static string Overlap(int a, int b) => "補正ピン " + (a + 1) + " と " + (b + 1) + " の位置が重なっています。";
-
-        private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     }
 }

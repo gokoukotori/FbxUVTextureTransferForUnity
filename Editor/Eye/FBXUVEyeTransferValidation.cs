@@ -9,7 +9,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
         internal static IReadOnlyList<FBXUVTransferValidationIssue> ValidateLayer(
             FBXUVEyeTextureTransferLayer layer, bool environment = true, GameObject buildRoot = null)
         {
-            if (!FBXUVLayerValidation.TryBegin(layer, "Eye Transfer Layerがありません。", "FBX UV Eye Texture Transfer Layer",
+            if (!FBXUVLayerValidation.TryBegin(layer, "FBX UV Eye Texture Transfer Layer がありません。", "FBX UV Eye Texture Transfer Layer",
                     environment, buildRoot, useResolvedRootsForBuild: true, out var checks))
                 return checks.Issues;
             var avatar = checks.AvatarRoot;
@@ -19,10 +19,10 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             {
                 if (eye == null || !eye.enabled || eye.target?.region == null) continue;
                 if (checks.TargetValid && texture != null && !MatchesSelectedRenderer(checks.TargetRoot, texture, eye.target))
-                    checks.Add(eye.name + ": 転送先のRenderer / SubmeshがCanvasのTargetTextureを使用していません。");
+                    checks.Add(eye.name + ": 転送先のRenderer / サブメッシュがCanvasの対象テクスチャを使用していません。");
                 if (avatar != null && texture != null &&
                     !FBXUVLayerValidation.UsesTargetTexture(avatar, texture, eye.target.region.mesh, eye.target.region.subMeshIndex))
-                    checks.Add(eye.name + ": アバター内に、選択したMesh / SubmeshとCanvasのTargetTextureを使用するRendererがありません。");
+                    checks.Add(eye.name + ": アバター内に、選択したメッシュ / サブメッシュとCanvasの対象テクスチャを使用するRendererがありません。");
             }
             return checks.Issues;
         }

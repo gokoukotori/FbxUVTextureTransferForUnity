@@ -56,7 +56,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                     .GetArrayElementAtIndex(candidateIndex)
                     .FindPropertyRelative("name")
                     .stringValue;
-                if (NamesEqual(candidate, normalizedName))
+                if (FBXUVEntryListControl.NamesEqual(candidate, normalizedName))
                 {
                     error = "同名のRegionが既にあります。";
                     return false;
@@ -124,18 +124,10 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                     .GetArrayElementAtIndex(index)
                     .FindPropertyRelative("name")
                     .stringValue;
-                if (NamesEqual(candidate, name)) return true;
+                if (FBXUVEntryListControl.NamesEqual(candidate, name)) return true;
             }
 
             return false;
-        }
-
-        private static bool NamesEqual(string left, string right)
-        {
-            return string.Equals(
-                (left ?? string.Empty).Trim(),
-                (right ?? string.Empty).Trim(),
-                StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool TryGetElement(

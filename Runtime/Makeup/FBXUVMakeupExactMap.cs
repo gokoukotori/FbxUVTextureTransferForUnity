@@ -221,7 +221,7 @@ namespace GokouKotori.FBXUVTextureTransfer
                         var id=records.Count/3;
                         records.Add(new Vector4(a.x,a.y,b.x,b.y));records.Add(new Vector4(c.x,c.y,s.x,s.y));records.Add(new Vector4(u.x,u.y,v.x,v.y));
                         var min=Vector2.Min(a,Vector2.Min(b,c));var max=Vector2.Max(a,Vector2.Max(b,c));
-                        grid.Add(id,Cell(min.x-1e-6f),Cell(max.x+1e-6f),Cell(min.y-1e-6f),Cell(max.y+1e-6f));
+                        grid.Add(id,FBXUVMath.UnitGridCell(min.x-1e-6f,32),FBXUVMath.UnitGridCell(max.x+1e-6f,32),FBXUVMath.UnitGridCell(min.y-1e-6f,32),FBXUVMath.UnitGridCell(max.y+1e-6f,32));
                     }
                     grid.Build(out var spans,out var ids);
                     data=new ComputeBuffer(records.Count,16);data.SetData(records);
@@ -233,7 +233,6 @@ namespace GokouKotori.FBXUVTextureTransfer
                 }
                 catch{Dispose();throw;}
             }
-            private static int Cell(float x)=>Mathf.Clamp(Mathf.FloorToInt(x*32),0,31);
             public void Dispose(){data?.Release();ranges?.Release();indices?.Release();data=ranges=indices=null;}
         }
     }

@@ -27,7 +27,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         protected GameObject SourceModelOrPrefab => layer == null ? null : layer.SourceModelOrPrefab;
         protected GameObject TargetModelOrPrefab => layer == null ? null : layer.TargetModelOrPrefab;
-        protected abstract string MissingLayerMessage { get; }
+        protected abstract string WindowTitle { get; }
+        internal const string MissingLayerMessage =
+            "編集するレイヤーを「編集中」に指定するか、Hierarchy でレイヤーを選択してください。";
 
         protected abstract void DrawContent();
 
@@ -47,6 +49,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         protected virtual void OnEnable()
         {
+            titleContent = new GUIContent(WindowTitle);
             EditorApplication.projectChanged -= HandleProjectChanged;
             EditorApplication.projectChanged += HandleProjectChanged;
             EditorApplication.hierarchyChanged -= HandleHierarchyChanged;
@@ -140,11 +143,24 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         internal void HandleSelectionChange()
         {
-            var selected = Selection.activeGameObject;
-            if (selected == null) return;
-            var selectedLayer = selected.GetComponent<TLayer>();
+            var selectedLayer = SelectedLayer();
             if (selectedLayer == null || selectedLayer == layer) return;
             SetLayer(selectedLayer);
+        }
+
+        // For the Tools menu: a window without a layer starts with the layer already selected in the Hierarchy,
+        // as selecting it after opening would. A window that has a layer keeps it.
+        internal void AdoptSelectedLayerIfEmpty()
+        {
+            if (layer != null) return;
+            var selectedLayer = SelectedLayer();
+            if (selectedLayer != null) SetLayer(selectedLayer);
+        }
+
+        private static TLayer SelectedLayer()
+        {
+            var selected = Selection.activeGameObject;
+            return selected == null ? null : selected.GetComponent<TLayer>();
         }
 
         internal static float PreviewSize(float windowWidth, int paneCount)

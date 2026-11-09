@@ -13,7 +13,7 @@ namespace GokouKotori.FBXUVTextureTransfer
         internal static void ValidateManualTarget(FBXUVEyeMapping map)
         {
             // Manual inverse sampling needs an unambiguous physical-plane lookup in both modes.
-            _ = new Surface(map.Target, map.TargetFrame, "転送先", "Eye手補正");
+            _ = new Surface(map.Target, map.TargetFrame, "転送先", "手補正");
         }
 
         internal static void Apply(FBXUVEyeMapping map, FBXUVEyeBinding binding)
@@ -81,7 +81,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             var sign = 0;
             for (var i = 0; i < contour.Length; i++)
             {
-                var cross = Cross(contour[i] - center, contour[(i + 1) % contour.Length] - center);
+                var cross = FBXUVMath.CrossDouble(contour[i] - center, contour[(i + 1) % contour.Length] - center);
                 if (Math.Abs(cross) < 1e-10 || (sign != 0 && Math.Sign(cross) != sign))
                     throw new ArgumentException("トポロジー型: " + label + "を瞳孔中心から対応付けできません。");
                 sign = Math.Sign(cross);
@@ -95,9 +95,9 @@ namespace GokouKotori.FBXUVTextureTransfer
             for (var i = 0; i < contour.Length; i++)
             {
                 var a = contour[i] - center; var edge = contour[(i + 1) % contour.Length] - contour[i];
-                var denominator = Cross(direction, edge);
+                var denominator = FBXUVMath.CrossDouble(direction, edge);
                 if (Math.Abs(denominator) < 1e-12) continue;
-                var t = Cross(a, edge) / denominator; var u = Cross(a, direction) / denominator;
+                var t = FBXUVMath.CrossDouble(a, edge) / denominator; var u = FBXUVMath.CrossDouble(a, direction) / denominator;
                 if (t > 0 && u >= -1e-6 && u <= 1 + 1e-6) distance = Math.Min(distance, t);
             }
             if (double.IsInfinity(distance)) throw new ArgumentException("トポロジー型: 瞳孔の境界を対応付けできません。");
@@ -111,12 +111,11 @@ namespace GokouKotori.FBXUVTextureTransfer
                 {
                     var a = pupil[i]; var b = pupil[(i + 1) % pupil.Length];
                     var c = outer[j]; var d = outer[(j + 1) % outer.Length];
-                    if (Cross(b-a,c-a)*Cross(b-a,d-a) < -1e-16 && Cross(d-c,a-c)*Cross(d-c,b-c) < -1e-16)
+                    if (FBXUVMath.CrossDouble(b-a,c-a)*FBXUVMath.CrossDouble(b-a,d-a) < -1e-16
+                        && FBXUVMath.CrossDouble(d-c,a-c)*FBXUVMath.CrossDouble(d-c,b-c) < -1e-16)
                         throw new ArgumentException("トポロジー型: 補正した瞳孔が目の外周を越えています。位置・大きさを調整してください。");
                 }
         }
-
-        private static double Cross(Vector2 a, Vector2 b) => (double)a.x * b.y - (double)a.y * b.x;
 
         private sealed class Surface
         {
@@ -256,24 +255,24 @@ namespace GokouKotori.FBXUVTextureTransfer
                 for(var i=0;i<cornerIds.Length;i+=3)
                 {
                     var a=cornerIds[i];var b=cornerIds[i+1];var c=cornerIds[i+2];
-                    var den=Cross(from[b]-from[a],from[c]-from[a]);
-                    var wb=Cross(p-from[a],from[c]-from[a])/den;var wc=Cross(from[b]-from[a],p-from[a])/den;var wa=1-wb-wc;
+                    var den=FBXUVMath.CrossDouble(from[b]-from[a],from[c]-from[a]);
+                    var wb=FBXUVMath.CrossDouble(p-from[a],from[c]-from[a])/den;var wc=FBXUVMath.CrossDouble(from[b]-from[a],p-from[a])/den;var wa=1-wb-wc;
                     if(Math.Min(wa,Math.Min(wb,wc)) < -1e-5) continue;
                     return to[a]*(float)wa+to[b]*(float)wb+to[c]*(float)wc;
                 }
-                throw Error("瞳孔または対応点が目の領域外にあります。位置・大きさとアイランドを確認してください。");
+                throw Error("瞳孔または対応点が目の領域外にあります。位置・大きさとUV島を確認してください。");
             }
 
             private ArgumentException Error(string message) => new ArgumentException(method+"（"+label+"）: "+message);
 
             private void Validate(Vector2[] points)
             {
-                foreach(var p in points) if(!FBXUVEyeGeometry.Finite(p.x)||!FBXUVEyeGeometry.Finite(p.y)) throw Error("座標が有限値ではありません。");
+                foreach(var p in points) if(!FBXUVMath.Finite(p.x)||!FBXUVMath.Finite(p.y)) throw Error("座標が有限値ではありません。");
                 var count=cornerIds.Length/3;var min=new Vector2[count];var max=new Vector2[count];
                 for(var t=0;t<count;t++)
                 {
                     var a=cornerIds[t*3];var b=cornerIds[t*3+1];var c=cornerIds[t*3+2];
-                    var old=Cross(Plane[b]-Plane[a],Plane[c]-Plane[a]);var area=Cross(points[b]-points[a],points[c]-points[a]);
+                    var old=FBXUVMath.CrossDouble(Plane[b]-Plane[a],Plane[c]-Plane[a]);var area=FBXUVMath.CrossDouble(points[b]-points[a],points[c]-points[a]);
                     var ratio=area/old;
                     if(Math.Abs(area)<1e-10 || ratio<1e-6 || ratio>1e6) throw Error("面の反転・退化または極端な伸縮が発生します。補正を弱めてください。");
                     min[t]=Vector2.Min(points[a],Vector2.Min(points[b],points[c])); max[t]=Vector2.Max(points[a],Vector2.Max(points[b],points[c]));

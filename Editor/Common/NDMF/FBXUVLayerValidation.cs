@@ -70,9 +70,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             var placement = ValidatePlacement(layer, layerName, checks.Issues);
             checks.AvatarRoot = placement.AvatarRoot;
             checks.TargetTexture = placement.TargetTexture;
-            checks.SourceValid = TryResolveModelRoot(layer.SourceModelOrPrefab, "Source", buildRoot, layer, checks.Issues, out var sourceRoot);
+            checks.SourceValid = TryResolveModelRoot(layer.SourceModelOrPrefab, "転送元", buildRoot, layer, checks.Issues, out var sourceRoot);
             checks.SourceRoot = sourceRoot;
-            checks.TargetValid = TryResolveModelRoot(layer.TargetModelOrPrefab, "Target", buildRoot, layer, checks.Issues, out var targetRoot);
+            checks.TargetValid = TryResolveModelRoot(layer.TargetModelOrPrefab, "転送先", buildRoot, layer, checks.Issues, out var targetRoot);
             checks.TargetRoot = targetRoot;
             if (useResolvedRootsForBuild && buildRoot != null && checks.SourceValid && checks.TargetValid)
             {
@@ -118,13 +118,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             placement.TargetTexture = placement.Canvas.TargetTexture == null ? null : placement.Canvas.TargetTexture.SelectTexture;
             if (placement.TargetTexture == null)
             {
-                issues.Add(new FBXUVTransferValidationIssue("親 MultiLayerImageCanvas の TargetTexture が未設定です。", placement.Canvas));
+                issues.Add(new FBXUVTransferValidationIssue("Canvasの対象テクスチャが未設定です。親 MultiLayerImageCanvas の Target Texture を設定してください。", placement.Canvas));
             }
 
             return placement;
         }
 
-        // label is "Source" or "Target".
+        // label is "転送元" or "転送先".
         internal static bool TryResolveModelRoot(
             GameObject reference,
             string label,
@@ -137,7 +137,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             if (reference == null)
             {
                 issues.Add(new FBXUVTransferValidationIssue(
-                    $"{label} Model/Prefab が未設定です。コンポーネントでProject内のModelまたはPrefabのメインルートを指定してください。",
+                    $"{label} Model / Prefab が未設定です。コンポーネントの「{label} Model / Prefab」にProject内のModelまたはPrefabのルートを指定してください。",
                     contextObject));
                 return false;
             }
@@ -147,7 +147,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                 return true;
             }
 
-            issues.Add(new FBXUVTransferValidationIssue($"{label} Model/Prefab が無効です: {error}", reference));
+            issues.Add(new FBXUVTransferValidationIssue($"{label} Model / Prefab が無効です: {error}", reference));
             return false;
         }
 

@@ -76,18 +76,6 @@ Shader "Hidden/FBXUVTextureTransfer/BodyOverlayTransfer"
                 return weight;
             }
 
-            float4 SampleOverlay(float2 source)
-            {
-                float2 pixel = source * _SourceSize.xy - 0.5;
-                int2 origin = int2(floor(pixel));
-                float2 weight = frac(pixel);
-                float4 lower = lerp(LoadPremultiplied(origin), LoadPremultiplied(origin + int2(1, 0)), weight.x);
-                float4 upper = lerp(LoadPremultiplied(origin + int2(0, 1)), LoadPremultiplied(origin + int2(1, 1)), weight.x);
-                float4 color = lerp(lower, upper, weight.y);
-                // ExternalToolAsLayer consumes straight RGBA.
-                return color.a > 0.0 ? float4(color.rgb / color.a, color.a) : 0;
-            }
-
             // Round to the nearest k/255 ourselves: k/255 is stored as k by every conforming UNORM8 conversion,
             // whereas D3D11 lets the hardware round an arbitrary float within 0.6 ULP (GPUs differ).
             float4 Quantize(float4 color)
@@ -122,7 +110,7 @@ Shader "Hidden/FBXUVTextureTransfer/BodyOverlayTransfer"
                     total += Qualify(origin + int2(1, 1), f.x * f.y, island, uv, limit, sum);
                     if (total > 0.0) uv = sum / total;
                 }
-                return Quantize(SampleOverlay(uv));
+                return Quantize(SampleSourceStraight(uv));
             }
             ENDHLSL
         }

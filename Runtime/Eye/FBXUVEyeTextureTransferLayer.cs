@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace GokouKotori.FBXUVTextureTransfer
 {
-    [AddComponentMenu("Gokoukotori/FBX UV Texture Transfer/FBX UV Eye Texture Transfer Layer")]
+    [AddComponentMenu("Gokoukotori/FBX UV Texture Transfer/FBX UV Eye Texture Transfer Layer (β版)")]
     [DisallowMultipleComponent]
     public sealed class FBXUVEyeTextureTransferLayer : FBXUVTransferLayerBase
     {
@@ -25,7 +25,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             try
             {
                 if (!SystemInfo.supportsComputeShaders || ResolveEyeShader() == null || !ResolveEyeShader().isSupported || ResolvePixelProcessShader() == null)
-                    throw new ArgumentException("Eye転送のShader / ComputeShaderを利用できません。");
+                    throw new ArgumentException("アイ転送用Shader / ComputeShaderを利用できません。");
                 if (sourceTexture == null) throw new ArgumentException("転送元テクスチャが未設定です。");
                 if (eyes == null || eyes.Count == 0) throw new ArgumentException("目の組み合わせを追加してください。");
                 var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

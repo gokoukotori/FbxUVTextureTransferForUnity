@@ -19,7 +19,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         internal const float MaxRadiusCentimeters = 30f;
         private const float PinHitPixels = 10f;
         private const int ControlHint = 72311;
-        private static readonly string[] toolLabels = { "移動", "補正ピンを追加", "固定ピンを追加" };
+        private static readonly string[] toolLabels = FBXUVManualCorrectionLabels.Tools;
         private static readonly Color32 invalidColor = new Color32(255, 0, 255, 200);
         private static readonly Color32 sharedColor = new Color32(255, 230, 0, 200);
         private static readonly Color outlineColor = new Color(.1f, .85f, 1, .6f);
@@ -209,6 +209,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             var saved = Saved();
             var origin = fixedPoint ? uv : ShownOrigin(entry, saved, uv);
             var candidate = saved.Copy();
+            // The first pin turns the correction on; with saved pins the switch stays where the user put it.
+            if (candidate.pins.Count == 0) candidate.enabled = true;
             candidate.pins.Add(new FBXUVBodyPin { origin = origin, position = uv, fixedPoint = fixedPoint });
             if (!Change(fixedPoint ? "固定ピンを追加" : "補正ピンを追加", candidate, entry)) return false;
             selected = candidate.pins.Count - 1;
@@ -235,7 +237,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             if (!TryCandidate(pinIndex, out var candidate)) return false;
             candidate.pins[pinIndex].position = candidate.pins[pinIndex].origin;
-            return Change("補正ピンの移動を取り消し", candidate);
+            return Change("補正ピンの移動を戻す", candidate);
         }
 
         internal bool DeletePin(int pinIndex)
@@ -250,9 +252,17 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         internal bool ResetAll()
         {
             if (layer == null || Dragging) return false;
-            if (!Change("補正ピンをすべてリセット", new FBXUVBodyManualSettings { enabled = Saved().enabled })) return false;
+            if (!Change(FBXUVManualCorrectionLabels.ResetAll, new FBXUVBodyManualSettings { enabled = Saved().enabled })) return false;
             selected = -1;
             return true;
+        }
+
+        // The button's entry point: nothing to reset or a drag in progress does nothing; otherwise asks before ResetAll().
+        internal bool RequestResetAll()
+        {
+            if (layer == null || Dragging) return false;
+            var count = Saved().pins?.Count ?? 0;
+            return count > 0 && FBXUVResetConfirmation.Confirm(count) && ResetAll();
         }
 
         internal bool SetEnabled(bool enabled)
@@ -260,7 +270,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (layer == null || Dragging) return false;
             var candidate = Saved().Copy();
             candidate.enabled = enabled;
-            return Change(enabled ? "補正ピンを有効にする" : "補正ピンを無効にする", candidate);
+            return Change(enabled ? FBXUVManualCorrectionLabels.Enable : "手補正を無効にする", candidate);
         }
 
         internal void Reset()
@@ -283,6 +293,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         }
 
         private FBXUVBodyManualSettings Saved() => layer.manual ?? new FBXUVBodyManualSettings();
+
+        private static bool CanAddPins(FBXUVBodyManualSettings settings)
+            => settings.enabled || settings.pins == null || settings.pins.Count == 0;
 
         private bool TryCandidate(int pinIndex, out FBXUVBodyManualSettings candidate)
         {
@@ -368,7 +381,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 preparedInputs = inputs;
                 var map = entry.Correspondence;
                 UpdateOutlines(entry);
-                // 「押している間は補正前」 shows Base*.
+                // 「押している間は手補正前」 shows Base*.
                 FBXUVBodyOverlayTransferRenderer.UploadRegion(entry, FBXUVBodyPinWarp.Restore(map));
                 Render(entry, ref before);
                 UpdateDiagnostics(ref diagnosticsBefore, map, map.BaseValid);
@@ -659,18 +672,21 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (PreviewError != null) EditorGUILayout.HelpBox("プレビューを表示できません：" + PreviewError, MessageType.Warning);
             using (new EditorGUI.DisabledScope(Dragging))
             {
-                var enabled = EditorGUILayout.ToggleLeft("補正を有効にする", settings.enabled);
+                var enabled = EditorGUILayout.ToggleLeft(FBXUVManualCorrectionLabels.Enable, settings.enabled);
                 if (enabled != settings.enabled)
                 {
                     SetEnabled(enabled);
                     Changed();
                 }
-                if (!settings.enabled) tool = 0;
-                using (new EditorGUI.DisabledScope(!settings.enabled)) tool = GUILayout.Toolbar(tool, toolLabels);
+                // Without pins the tools stay usable: the first pin turns the correction on (AddPin).
+                var locked = !CanAddPins(settings);
+                if (locked) tool = 0;
+                using (new EditorGUI.DisabledScope(locked)) tool = GUILayout.Toolbar(tool, toolLabels);
+                if (locked) EditorGUILayout.HelpBox(FBXUVManualCorrectionLabels.PinsLockedMessage, MessageType.Info);
             }
             using (new EditorGUILayout.HorizontalScope())
             {
-                showOutline = GUILayout.Toggle(showOutline, "島の輪郭");
+                showOutline = GUILayout.Toggle(showOutline, FBXUVManualCorrectionLabels.Outline);
                 showPins = GUILayout.Toggle(showPins, "ピン");
                 var diagnostics = GUILayout.Toggle(showDiagnostics, "診断表示");
                 if (diagnostics != showDiagnostics)
@@ -680,7 +696,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                     Changed();
                 }
             }
-            compare = GUILayout.RepeatButton("押している間は補正前");
+            compare = GUILayout.RepeatButton(FBXUVManualCorrectionLabels.Compare);
             if (viewport.DrawControls(SelectedIsland(settings))) repaint?.Invoke();
             if (showDiagnostics)
                 EditorGUILayout.HelpBox("マゼンタ：転送元が見つからないテクセル\n黄色：左右で共有されたUV（片側だけが使われます）", MessageType.None);
@@ -691,16 +707,16 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             foreach (var warning in sharedUvWarnings) EditorGUILayout.HelpBox(warning, MessageType.Warning);
             using (new EditorGUI.DisabledScope(Dragging || settings.pins == null || settings.pins.Count == 0))
             {
-                if (GUILayout.Button("すべてリセット"))
+                if (GUILayout.Button(FBXUVManualCorrectionLabels.ResetAll))
                 {
-                    ResetAll();
+                    RequestResetAll();
                     Changed();
                 }
             }
             EditorGUILayout.HelpBox(
-                "「補正ピンを追加」「固定ピンを追加」を押してから画像をクリックしてピンを置きます。補正ピンはドラッグで動かし、離すと確定します（Undo 1回で戻ります）。Escでドラッグを取り消します。固定ピンは補正前の対応を保ちます。スクロールで拡大、中ボタンで移動。\n"
+                "「補正ピンを追加」「固定ピンを追加」を押してから画像をクリックしてピンを置きます。最初のピンを置くと手補正が有効になります。補正ピンはドラッグで動かし、離すと確定します（Undo 1回で戻ります）。Escでドラッグを取り消します。固定ピンは手補正前の対応を保ちます。スクロールで拡大、中ボタンで移動。\n"
                 + "影響範囲は3Dの距離なので、島の境目をまたいで両側が同じように動きます。\n"
-                + "表示はこのレイヤー単体です（最大" + MaxPreviewResolution + "px）。他レイヤー・Shaderを含む仕上がりはTTTプレビューで確認してください。",
+                + "表示はこのレイヤー単体です（最大" + MaxPreviewResolution + "px）。他レイヤー・Shaderを含む仕上がりはTexTransTool のプレビューで確認してください。",
                 MessageType.None);
         }
 
@@ -709,7 +725,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             var pins = settings.pins;
             if (pins == null || selected < 0 || selected >= pins.Count || pins[selected] == null)
             {
-                EditorGUILayout.LabelField("ピンを選ぶと、影響範囲の変更・移動の取り消し・削除ができます。", EditorStyles.wordWrappedMiniLabel);
+                EditorGUILayout.LabelField("ピンを選ぶと、影響範囲の変更・移動を戻す・削除ができます。", EditorStyles.wordWrappedMiniLabel);
                 return;
             }
             var pin = pins[selected];
@@ -729,13 +745,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 {
                     using (new EditorGUI.DisabledScope(pin.fixedPoint || pin.position == pin.origin))
                     {
-                        if (GUILayout.Button("移動を取り消し"))
+                        if (GUILayout.Button(FBXUVManualCorrectionLabels.ResetMove))
                         {
                             ResetMove(selected);
                             Changed();
                         }
                     }
-                    if (GUILayout.Button("削除"))
+                    if (GUILayout.Button(FBXUVManualCorrectionLabels.DeletePin))
                     {
                         DeletePin(selected);
                         Changed();
@@ -885,7 +901,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
             if (e.type != EventType.MouseDown || e.button != 0 || Dragging || !local.Contains(e.mousePosition)) return;
             var uv = FBXUVPreviewViewport.ToUv(image, e.mousePosition);
-            if (tool != 0 && settings.enabled) AddPin(uv, tool == 2);
+            if (tool != 0 && CanAddPins(settings)) AddPin(uv, tool == 2);
             else
             {
                 selected = HitTest(image, settings, e.mousePosition);

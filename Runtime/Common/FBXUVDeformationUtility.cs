@@ -376,16 +376,16 @@ namespace GokouKotori.FBXUVTextureTransfer
             {
                 this.triangles = triangles;
                 this.bounds = bounds;
-                if (triangles.Count < 16 || !Finite(bounds.minU) || !Finite(bounds.maxU)
-                    || !Finite(bounds.minV) || !Finite(bounds.maxV)) return;
+                if (triangles.Count < 16 || !FBXUVMath.Finite(bounds.minU) || !FBXUVMath.Finite(bounds.maxU)
+                    || !FBXUVMath.Finite(bounds.minV) || !FBXUVMath.Finite(bounds.maxV)) return;
                 size = Mathf.Clamp(Mathf.CeilToInt(Mathf.Sqrt(triangles.Count / 4f)), 2, 32);
                 cells = new List<FBXUVTriangle>[size * size];
                 var references = 0;
                 foreach (var triangle in triangles)
                 {
-                    if (!Finite(triangle.a.x) || !Finite(triangle.a.y)
-                        || !Finite(triangle.b.x) || !Finite(triangle.b.y)
-                        || !Finite(triangle.c.x) || !Finite(triangle.c.y))
+                    if (!FBXUVMath.Finite(triangle.a.x) || !FBXUVMath.Finite(triangle.a.y)
+                        || !FBXUVMath.Finite(triangle.b.x) || !FBXUVMath.Finite(triangle.b.y)
+                        || !FBXUVMath.Finite(triangle.c.x) || !FBXUVMath.Finite(triangle.c.y))
                     {
                         cells = null;
                         return;
@@ -417,7 +417,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             internal bool Contains(Vector2 point)
             {
                 if (cells == null) return ContainsPoint(triangles, point);
-                if (!Finite(point.x) || !Finite(point.y)) return false;
+                if (!FBXUVMath.Finite(point.x) || !FBXUVMath.Finite(point.y)) return false;
                 var candidates = cells[Cell(point.y, bounds.minV, bounds.maxV) * size
                     + Cell(point.x, bounds.minU, bounds.maxU)];
                 return candidates != null && ContainsPoint(candidates, point);
@@ -430,8 +430,6 @@ namespace GokouKotori.FBXUVTextureTransfer
                 if (normalized >= 1) return size - 1;
                 return (int)(normalized * size);
             }
-
-            private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
         private static List<FBXUVTriangle> DistinctTriangles(IReadOnlyList<FBXUVTriangle> triangles)

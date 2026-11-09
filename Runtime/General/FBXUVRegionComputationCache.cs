@@ -41,25 +41,12 @@ namespace GokouKotori.FBXUVTextureTransfer
         private static bool SameRegion(FBXUVTransferRegion snapshot, FBXUVTransferRegion current)
         {
             return snapshot != null && snapshot.bounds.Equals(current.bounds)
-                && SameTriangles(snapshot.triangles, current.triangles);
-        }
-
-        private static bool SameTriangles(List<FBXUVTriangle> saved, List<FBXUVTriangle> current)
-        {
-            if (saved == null || current == null) return saved == current;
-            if (saved.Count != current.Count) return false;
-            for (var i = 0; i < saved.Count; i++)
-            {
-                var a = saved[i]; var b = current[i];
-                if (a == null || b == null) { if (a != b) return false; }
-                else if (a.index != b.index || !a.a.Equals(b.a) || !a.b.Equals(b.b) || !a.c.Equals(b.c)) return false;
-            }
-            return true;
+                && FBXUVTriangleSnapshot.Same(snapshot.triangles, current.triangles);
         }
 
         private static FBXUVTransferRegion Snapshot(FBXUVTransferRegion region)
         {
-            var triangles = FBXUVMakeupComputationCache.CopyTriangles(region.triangles);
+            var triangles = FBXUVTriangleSnapshot.Copy(region.triangles);
             return new FBXUVTransferRegion
             {
                 bounds = region.bounds,

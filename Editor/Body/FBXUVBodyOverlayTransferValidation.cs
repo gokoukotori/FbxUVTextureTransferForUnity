@@ -9,7 +9,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
         internal static IReadOnlyList<FBXUVTransferValidationIssue> ValidateLayer(
             FBXUVBodyOverlayTransferLayer layer, bool environment = true, GameObject buildRoot = null)
         {
-            if (!FBXUVLayerValidation.TryBegin(layer, "Body Overlay Transfer Layerがありません。", "FBX UV Body Overlay Transfer Layer",
+            if (!FBXUVLayerValidation.TryBegin(layer, "FBX UV Body Overlay Transfer Layer がありません。", "FBX UV Body Overlay Transfer Layer",
                     environment, buildRoot, useResolvedRootsForBuild: true, out var checks))
                 return checks.Issues;
             var texture = checks.TargetTexture;
@@ -22,14 +22,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             if (layer.overlayTexture == null) checks.Add("オーバーレイ画像が未設定です。");
             if (layer.sourceBodyTexture == null) checks.Add("転送元ボディテクスチャが未設定です。");
             else if (sourceValid && FBXUVTextureUsage.Collect(source, layer.sourceBodyTexture).Count == 0)
-                checks.Add("転送元ボディテクスチャは転送元モデルで使われていません。");
+                checks.Add("転送元ボディテクスチャは転送元 Model / Prefabで使われていません。");
             if (targetValid && texture != null && FBXUVTextureUsage.Collect(target, texture).Count == 0)
-                checks.Add("Canvasの対象テクスチャを使うサブメッシュが転送先モデルにありません。");
+                checks.Add("Canvasの対象テクスチャを使うサブメッシュが転送先 Model / Prefabにありません。");
 
             var sourceAnimator = sourceValid ? HumanoidAnimator(source) : null;
             var targetAnimator = targetValid ? HumanoidAnimator(target) : null;
-            if (sourceValid && sourceAnimator == null) checks.Add("Humanoid のアバターが必要です（Source）。");
-            if (targetValid && targetAnimator == null) checks.Add("Humanoid のアバターが必要です（Target）。");
+            if (sourceValid && sourceAnimator == null) checks.Add("Humanoid のアバターが必要です（転送元）。");
+            if (targetValid && targetAnimator == null) checks.Add("Humanoid のアバターが必要です（転送先）。");
             if (sourceAnimator != null && targetAnimator != null)
             {
                 var missing = FBXUVBodySkeletonAlignment.MissingRequiredBones(Joints(sourceAnimator), Joints(targetAnimator));

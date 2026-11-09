@@ -91,7 +91,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             for (var i = 0; i < pins.Count; i++)
             {
                 var pin = pins[i];
-                if (pin == null || !Finite(pin.origin) || !Finite(pin.position) || !FBXUVEyeGeometry.Finite(pin.radius) || pin.radius <= 0)
+                if (pin == null || !FBXUVMath.Finite(pin.origin) || !FBXUVMath.Finite(pin.position) || !FBXUVMath.Finite(pin.radius) || pin.radius <= 0)
                     throw Error($"ピン{i + 1}の位置または影響範囲が不正です。");
                 if (!CanPlace(pin.origin) || !CanPlace(pin.position))
                     throw Error($"ピン{i + 1}は虹彩の内部に置いてください。外周と別パーツの瞳孔は固定です。");
@@ -113,7 +113,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             for (var i = 0; i < pins.Count; i++)
             {
                 var coefficient = new Vector2((float)matrix[i, pins.Count], (float)matrix[i, pins.Count + 1]);
-                if (!Finite(coefficient)) throw Error("補正を計算できません。ピンの配置を確認してください。");
+                if (!FBXUVMath.Finite(coefficient)) throw Error("補正を計算できません。ピンの配置を確認してください。");
                 Data[i * 2 + 1] = coefficient;
                 // max |d((1-r)^4(1+4r))/dr| = 135/64.
                 bound += coefficient.magnitude * (135.0 / 64) / Data[i * 2].z;
@@ -170,7 +170,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             return point;
         }
 
-        internal bool CanPlace(Vector2 position) => Finite(position) && Inside(position, map.TargetFrame.Contour)
+        internal bool CanPlace(Vector2 position) => FBXUVMath.Finite(position) && Inside(position, map.TargetFrame.Contour)
             && (pupilContour == null || !Inside(position, pupilContour))
             && !holes.Any(hole => Inside(position, hole))
             && TrySourceUv(position, out _);
@@ -265,7 +265,6 @@ namespace GokouKotori.FBXUVTextureTransfer
             }
         }
 
-        private static bool Finite(Vector2 v) => FBXUVEyeGeometry.Finite(v.x) && FBXUVEyeGeometry.Finite(v.y);
-        private static ArgumentException Error(string message) => new ArgumentException("Eye手補正: " + message);
+        private static ArgumentException Error(string message) => new ArgumentException("手補正: " + message);
     }
 }

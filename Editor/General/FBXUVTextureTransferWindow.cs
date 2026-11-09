@@ -7,15 +7,13 @@ using Unity.Profiling;
 
 namespace GokouKotori.FBXUVTextureTransfer.Editor
 {
-    // UV Region Editor: adds / removes / renames Regions, switches the active one and writes the picked islands into regionBindings.
+    // Texture transfer editor: adds / removes / renames Regions, switches the active one and writes the picked islands into regionBindings.
     public sealed class FBXUVTextureTransferWindow : FBXUVLayerWindow<FBXUVTextureTransferLayer>
     {
         private static readonly ProfilerMarker WindowGuiMarker =
             new ProfilerMarker("FBXUVTextureTransfer.EditorWindow.OnGUI");
 
-        private const string WindowTitle = "FBX UV Texture Transfer";
-        private const string NoRegionMessage = "「Regionを追加」でRegionを追加してから、UV島を選択してください。";
-        private const string MissingBindingMessage = "選択中のregionがLayerにありません。";
+        private const string MissingBindingMessage = "選択中のRegionがレイヤーにありません。";
         private static readonly GUIContent OrientationLabel =
             new GUIContent("向き補正", "転送元画像を転送先の領域へ配置する向きを手動で指定します。");
         private static readonly GUIContent[] OrientationOptions =
@@ -39,18 +37,17 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         internal int ActiveRegionIndex => activeRegionIndex;
         internal string ActiveRegionName => activeRegionName;
 
-        protected override string MissingLayerMessage =>
-            "FBXUVTextureTransferLayer を指定してください。HierarchyでLayerを選択しても開けます。";
+        protected override string WindowTitle => FBXUVEditorNames.TextureTransferEditor;
 
-        [MenuItem("Tools/Gokoukotori/FBX UV Texture Transfer/UV Region Editor")]
+        [MenuItem(FBXUVEditorNames.MenuRoot + FBXUVEditorNames.TextureTransferEditor, priority = 100)]
         public static void Open()
         {
-            GetWindow<FBXUVTextureTransferWindow>(WindowTitle);
+            GetWindow<FBXUVTextureTransferWindow>(FBXUVEditorNames.TextureTransferEditor).AdoptSelectedLayerIfEmpty();
         }
 
         public static void Open(FBXUVTextureTransferLayer targetLayer)
         {
-            var window = GetWindow<FBXUVTextureTransferWindow>(WindowTitle);
+            var window = GetWindow<FBXUVTextureTransferWindow>(FBXUVEditorNames.TextureTransferEditor);
             window.SetLayer(targetLayer);
             window.Show();
             window.Focus();
@@ -163,9 +160,11 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             return Reconcile(serializedLayer, forceRefresh ? FBXUVRefreshKind.RestoreSaved : FBXUVRefreshKind.None);
         }
 
+        // On a layer without Regions the first island picked adds one, as 「Regionを追加」 would.
         internal void StoreIsland(bool isSource, in FBXUVRegionPick pick)
         {
             if (!isSource && !FBXUVCanvasHierarchyUtility.TryFindCanvas(Layer, out _, out _, out _)) return;
+            if ((Layer.RegionBindings?.Count ?? 0) == 0 && AddRegion(true) < 0) return;
 
             var currentSerializedLayer = GetSerializedLayer();
             var binding = currentSerializedLayer == null ? null : GetActiveBinding(currentSerializedLayer);
@@ -245,16 +244,18 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             FBXUVRegionBindingSerializedPropertyUtility.ApplyModifiedProperties(serializedLayer);
         }
 
-        private void SelectRegion(SerializedObject serializedLayer, int index)
+        private void SelectRegion(SerializedObject serializedLayer, int index,
+            FBXUVRefreshKind kind = FBXUVRefreshKind.RestoreSaved)
         {
             activeRegionIndex = index;
             activeRegionName = GetActiveBinding(serializedLayer)?
                 .FindPropertyRelative("name")?.stringValue ?? string.Empty;
-            SyncPanes(FBXUVRefreshKind.RestoreSaved);
+            SyncPanes(kind);
         }
 
         // Adds a Region with a unique name and makes it the active one. Returns its index, or -1 without a layer.
-        internal int AddRegion()
+        // keepPendingPicks: added by an island click, so both panes keep the meshes being picked from.
+        internal int AddRegion(bool keepPendingPicks = false)
         {
             var currentSerializedLayer = GetSerializedLayer();
             if (currentSerializedLayer == null) return -1;
@@ -265,7 +266,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (index < 0) return -1;
 
             ApplyRegionListChange(currentSerializedLayer, "Regionを追加");
-            SelectRegion(currentSerializedLayer, index);
+            SelectRegion(currentSerializedLayer, index,
+                keepPendingPicks ? FBXUVRefreshKind.PreservePending : FBXUVRefreshKind.RestoreSaved);
             return index;
         }
 
@@ -347,33 +349,10 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                     : FBXUVCandidateMessages.Target(Layer, targetTexture, candidates.Options.Count, pane.Mesh != null),
                 isSource ? Layer.DefaultSourceTexture : targetTexture,
                 size);
-            context.HandleInput = HandleClickWithoutRegion;
-
             var pick = pane.Draw(context);
             if (!pick.HasValue) return;
 
-            if (activeRegionIndex < 0)
-            {
-                Notify(NoRegionMessage);
-                return;
-            }
-
             StoreIsland(isSource, pick.Value);
-        }
-
-        private bool HandleClickWithoutRegion(Rect local, Rect image)
-        {
-            if (activeRegionIndex >= 0) return false;
-
-            var current = Event.current;
-            if (current.type != EventType.MouseDown || current.button != 0 || !local.Contains(current.mousePosition))
-            {
-                return false;
-            }
-
-            Notify(NoRegionMessage);
-            current.Use();
-            return true;
         }
 
         private FBXUVMeshCandidateCache.Snapshot SourceSnapshot(out string error)
@@ -412,7 +391,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 {
                     var candidateName = bindings.GetArrayElementAtIndex(index)
                         .FindPropertyRelative("name")?.stringValue;
-                    if (NamesEqual(candidateName, activeRegionName))
+                    if (FBXUVEntryListControl.NamesEqual(candidateName, activeRegionName))
                     {
                         reconciledIndex = index;
                         break;
@@ -496,11 +475,6 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
             regionNameLabelsValid = true;
             return regionNameLabels;
-        }
-
-        private static bool NamesEqual(string first, string second)
-        {
-            return string.Equals(first?.Trim(), second?.Trim(), StringComparison.OrdinalIgnoreCase);
         }
     }
 }

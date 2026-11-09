@@ -15,21 +15,21 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             targetRoot = null;
             if (!FBXUVAvatarRootResolver.TryResolve(layer, out var avatarRoot, out var avatarError))
             {
-                error = $"親Avatar Rootを解決できません: {avatarError}";
+                error = $"親のアバターを特定できません: {avatarError}";
                 return false;
             }
 
             var assetPath = ResolvePrefabAssetPath(avatarRoot);
             if (string.IsNullOrEmpty(assetPath))
             {
-                error = "親Avatar RootにPrefab接続がありません。Target Model / Prefabを手動で指定してください。";
+                error = "親のアバターにPrefab接続がありません。転送先 Model / Prefab を手動で指定してください。";
                 return false;
             }
 
             var mainRoot = AssetDatabase.LoadMainAssetAtPath(assetPath) as GameObject;
             if (!TryValidateRoot(mainRoot, out var rootError))
             {
-                error = $"親Avatar RootのPrefabをTargetに使用できません: {rootError}";
+                error = $"親のアバターのPrefabを転送先に使用できません: {rootError}";
                 return false;
             }
 
@@ -55,7 +55,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             changed = false;
             if (layer == null)
             {
-                error = "FBX UV Texture Transfer Layerがありません。";
+                error = "レイヤーがありません。";
                 return false;
             }
 
@@ -103,13 +103,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
             if (!EditorUtility.IsPersistent(root) || !AssetDatabase.Contains(root))
             {
-                error = "Project内のModelまたはPrefabアセットを指定してください。Scene Objectは指定できません。";
+                error = "Project内のModelまたはPrefabアセットを指定してください。シーン上のオブジェクトは指定できません。";
                 return false;
             }
 
             if (!AssetDatabase.IsMainAsset(root))
             {
-                error = "ModelまたはPrefabアセットのmain rootを指定してください。子GameObjectは指定できません。";
+                error = "ModelまたはPrefabアセットの Prefab のルートを指定してください。子GameObjectは指定できません。";
                 return false;
             }
 
@@ -122,7 +122,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 return true;
             }
 
-            error = "通常Prefab、Model Prefab、またはPrefab Variantのmain rootを指定してください。";
+            error = "通常Prefab、Model Prefab、またはPrefab Variant の Prefab のルートを指定してください。";
             return false;
         }
 

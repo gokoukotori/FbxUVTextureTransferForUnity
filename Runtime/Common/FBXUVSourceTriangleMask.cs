@@ -71,10 +71,10 @@ namespace GokouKotori.FBXUVTextureTransfer
                 records.Add(new Vector4(triangle.c.x, triangle.c.y, 0, 0));
                 // Match the barycentric tolerance used on shared edges by the shader.
                 // Expanding the bins avoids dropping a candidate at a grid-cell boundary.
-                var minX = Cell(Mathf.Min(triangle.a.x, Mathf.Min(triangle.b.x, triangle.c.x)) - 2e-6f, gridSize);
-                var maxX = Cell(Mathf.Max(triangle.a.x, Mathf.Max(triangle.b.x, triangle.c.x)) + 2e-6f, gridSize);
-                var minY = Cell(Mathf.Min(triangle.a.y, Mathf.Min(triangle.b.y, triangle.c.y)) - 2e-6f, gridSize);
-                var maxY = Cell(Mathf.Max(triangle.a.y, Mathf.Max(triangle.b.y, triangle.c.y)) + 2e-6f, gridSize);
+                var minX = FBXUVMath.UnitGridCell(Mathf.Min(triangle.a.x, Mathf.Min(triangle.b.x, triangle.c.x)) - 2e-6f, gridSize);
+                var maxX = FBXUVMath.UnitGridCell(Mathf.Max(triangle.a.x, Mathf.Max(triangle.b.x, triangle.c.x)) + 2e-6f, gridSize);
+                var minY = FBXUVMath.UnitGridCell(Mathf.Min(triangle.a.y, Mathf.Min(triangle.b.y, triangle.c.y)) - 2e-6f, gridSize);
+                var maxY = FBXUVMath.UnitGridCell(Mathf.Max(triangle.a.y, Mathf.Max(triangle.b.y, triangle.c.y)) + 2e-6f, gridSize);
                 grid.Add(index, minX, maxX, minY, maxY);
             }
             if (records.Count == 0) throw new ArgumentException(degenerateMessage);
@@ -89,8 +89,6 @@ namespace GokouKotori.FBXUVTextureTransfer
             material.SetBuffer("_SourceCellRanges", cellRanges);
             material.SetBuffer("_SourceCellIndices", cellIndices);
         }
-
-        private static int Cell(float value, int gridSize) => Mathf.Clamp(Mathf.FloorToInt(value * gridSize), 0, gridSize - 1);
 
         public void Dispose()
         {

@@ -138,7 +138,11 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             return Confirm($"{kind}を削除", $"「{name}」を削除しますか？\n{removeDetail}");
         }
 
-        // Names are trimmed and compared case-insensitively; the entry's own current name is not a duplicate.
+        // The layers' name rule: names are trimmed and compared case-insensitively, and null counts as empty.
+        internal static bool NamesEqual(string left, string right) =>
+            string.Equals((left ?? string.Empty).Trim(), (right ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase);
+
+        // Names follow NamesEqual; the entry's own current name is not a duplicate.
         internal static bool ValidateName(
             string kind,
             IReadOnlyList<string> names,
@@ -157,7 +161,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             for (var other = 0; other < names.Count; other++)
             {
                 if (other == index) continue;
-                if (string.Equals((names[other] ?? string.Empty).Trim(), normalized, StringComparison.OrdinalIgnoreCase))
+                if (NamesEqual(names[other], normalized))
                 {
                     error = $"同じ名前の{kind}が既にあります。";
                     return false;

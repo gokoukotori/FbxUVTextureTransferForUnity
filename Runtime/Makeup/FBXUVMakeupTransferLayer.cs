@@ -47,11 +47,11 @@ namespace GokouKotori.FBXUVTextureTransfer
                 if (sourceAnalysis == null) sourceAnalysis = new FBXUVLiveMeshAnalysis();
                 if (targetAnalysis == null) targetAnalysis = new FBXUVLiveMeshAnalysis();
                 if (!IsRegionReady(sourceRegion, sourceAnalysis) || !IsRegionReady(targetRegion, targetAnalysis))
-                    return Fail("顔Regionの選択・UV・Mesh hashが無効です。顔領域を再選択してください。", out reason);
+                    return Fail("顔のUV島の選択・UV・メッシュの内容が無効です。顔のUV島を選び直してください。", out reason);
             }
             catch (Exception)
             {
-                return Fail("顔MeshのUV・三角形を読み取れません。顔領域を再選択してください。", out reason);
+                return Fail("顔のメッシュのUV・三角形を読み取れません。顔のUV島を選び直してください。", out reason);
             }
             try { mapping = GetMapping(); }
             catch (Exception exception) { return Fail("基本変形を生成できません。" + exception.Message, out reason); }

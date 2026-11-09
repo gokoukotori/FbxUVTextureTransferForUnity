@@ -8,24 +8,23 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
     // come from the shared layer window.
     public sealed class FBXUVBodyOverlayTransferWindow : FBXUVLayerWindow<FBXUVBodyOverlayTransferLayer>
     {
-        private const string WindowTitle = "ボディ転送";
         private const float SidePanelWidth = 320f;
 
         private readonly FBXUVBodyPinEditor pinEditor = new FBXUVBodyPinEditor();
 
         internal FBXUVBodyPinEditor PinEditor => pinEditor;
 
-        protected override string MissingLayerMessage => "設定するBody Overlay Transfer Layerを指定してください。";
+        protected override string WindowTitle => FBXUVEditorNames.BodyTransferEditor;
 
-        [MenuItem("Tools/Gokoukotori/FBX UV Texture Transfer/Body Overlay Editor")]
+        [MenuItem(FBXUVEditorNames.MenuRoot + FBXUVEditorNames.BodyTransferEditor, priority = 103)]
         public static void Open()
         {
-            GetWindow<FBXUVBodyOverlayTransferWindow>(WindowTitle);
+            GetWindow<FBXUVBodyOverlayTransferWindow>(FBXUVEditorNames.BodyTransferEditor).AdoptSelectedLayerIfEmpty();
         }
 
         public static FBXUVBodyOverlayTransferWindow Open(FBXUVBodyOverlayTransferLayer layer)
         {
-            var window = GetWindow<FBXUVBodyOverlayTransferWindow>(WindowTitle);
+            var window = GetWindow<FBXUVBodyOverlayTransferWindow>(FBXUVEditorNames.BodyTransferEditor);
             window.SetLayer(layer);
             window.Show();
             window.Focus();

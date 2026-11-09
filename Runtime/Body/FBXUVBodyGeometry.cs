@@ -91,7 +91,7 @@ namespace GokouKotori.FBXUVTextureTransfer
             {
                 var renderer = usage.Renderer;
                 var mesh = usage.Mesh;
-                var path = HierarchyPath(rootTransform, renderer.transform);
+                var path = FBXUVRendererMeshUtility.RelativePath(rootTransform, renderer.transform);
                 var vertexBase = positions.Count;
                 var vertices = mesh.vertices;
                 var meshNormals = mesh.normals;
@@ -328,15 +328,6 @@ namespace GokouKotori.FBXUVTextureTransfer
                 if (humanOf.TryGetValue(current, out var found)) return found;
             }
             return (int)HumanBodyBones.Hips;
-        }
-
-        private static string HierarchyPath(Transform root, Transform transform)
-        {
-            var names = new List<string>();
-            for (var current = transform; current != null && current != root; current = current.parent)
-                names.Add(current.name);
-            names.Reverse();
-            return string.Join("/", names);
         }
 
         internal static Texture SuggestBodyTexture(GameObject modelRoot)

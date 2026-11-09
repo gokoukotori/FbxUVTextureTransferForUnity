@@ -9,19 +9,23 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
     // Makeup transfer: face island selection and landmark editing on two shared region picker panes.
     public sealed class FBXUVMakeupTransferWindow : FBXUVLayerWindow<FBXUVMakeupTransferLayer>
     {
-        private const string WindowTitle = "メイク転送";
 
         [SerializeField] internal bool selectIsland = true;
         [SerializeField] internal int selectedPoint = -1;
         // Copied from the panes' PreviewScreenRect (relative to the window origin).
         [NonSerialized] internal Rect sourceImageRect;
         [NonSerialized] internal Rect targetImageRect;
-        [NonSerialized] internal string message;
+        [NonSerialized] internal FBXUVMessage message;
         [NonSerialized] private Vector2 pointsScroll;
         [NonSerialized] private FBXUVRegionPickerPane sourcePane;
         [NonSerialized] private FBXUVRegionPickerPane targetPane;
+        // The in-flight drag: only a draft until release. The layer is written once, on MouseUp.
         [NonSerialized] private int dragControl;
-        [NonSerialized] private int dragUndoGroup = -1;
+        [NonSerialized] private int draftPoint = -1;
+        [NonSerialized] private bool draftIsSource;
+        [NonSerialized] private Vector2 draftUv;
+        // Set by an automatic placement; applied at the next Layout so the click's GUI pass keeps the panes it laid out.
+        [NonSerialized] private bool showLandmarksOnNextLayout;
         private readonly MakeupBoundaryState sourceBoundary = new MakeupBoundaryState();
         private readonly MakeupBoundaryState targetBoundary = new MakeupBoundaryState();
 
@@ -29,7 +33,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         internal FBXUVRegionPickerPane SourcePane => sourcePane ??= new FBXUVRegionPickerPane("転送元：元の顔", AnalysisCache);
         internal FBXUVRegionPickerPane TargetPane => targetPane ??= new FBXUVRegionPickerPane("転送先：転送先の顔", AnalysisCache);
 
-        protected override string MissingLayerMessage => "メイク転送LayerのInspectorから開いてください。";
+        protected override string WindowTitle => FBXUVEditorNames.MakeupTransferEditor;
 
         // Boundary loops of one saved face island. Suggestions only fill the popups; they never change saved landmarks.
         private sealed class MakeupBoundaryState
@@ -94,15 +98,15 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
         }
 
-        [MenuItem("Tools/Gokoukotori/FBX UV Texture Transfer/Makeup Transfer Editor")]
+        [MenuItem(FBXUVEditorNames.MenuRoot + FBXUVEditorNames.MakeupTransferEditor, priority = 101)]
         public static void Open()
         {
-            GetWindow<FBXUVMakeupTransferWindow>(WindowTitle);
+            GetWindow<FBXUVMakeupTransferWindow>(FBXUVEditorNames.MakeupTransferEditor).AdoptSelectedLayerIfEmpty();
         }
 
         public static void Open(FBXUVMakeupTransferLayer layer)
         {
-            var window = GetWindow<FBXUVMakeupTransferWindow>(WindowTitle);
+            var window = GetWindow<FBXUVMakeupTransferWindow>(FBXUVEditorNames.MakeupTransferEditor);
             window.SetLayer(layer);
             window.Show();
             window.Focus();
@@ -119,15 +123,19 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             if (!FBXUVMakeupNoseUtility.TryAdd(Layer, out var index, out var error))
             {
-                message = error;
+                message = FBXUVMessage.Warning(error);
                 return false;
             }
             selectedPoint = index;
             selectIsland = false;
-            message = "鼻先の候補を追加しました。両方の画像で位置を確認し、必要なら移動してください。鼻先の追加は眼・口・頬にも影響するため、アバター表示も確認してください。";
+            message = FBXUVMessage.Info("鼻先の候補を追加しました。両方の画像で位置を確認し、必要なら移動してください。鼻先の追加は眼・口・頬にも影響するため、アバター表示も確認してください。");
             Repaint();
             return true;
         }
+
+        // True while a draft exists; the saved landmarks are untouched until release.
+        internal bool Dragging => dragControl != 0;
+        internal Vector2 DraftUv => draftUv;
 
         internal List<FBXUVMeshOption> CollectOptions(bool isSource, out string error) => Candidates(isSource, out error).Options;
 
@@ -141,20 +149,26 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         protected override void OnDisable()
         {
             base.OnDisable();
-            EndDrag();
+            CancelDrag();
         }
+
+        private void OnLostFocus() => CancelDrag();
 
         protected override void OnLayerChanged()
         {
-            EndDrag();
+            CancelDrag();
             selectedPoint = -1;
-            message = null;
+            message = default;
             pointsScroll = Vector2.zero;
+            showLandmarksOnNextLayout = false;
+            // Island selection has nothing left to do once both face islands are saved.
+            selectIsland = !HasBothFaceIslands();
         }
 
         internal override void OnRefresh(FBXUVRefreshKind kind)
         {
-            EndDrag();
+            // Undo / redo and external edits arrive here; the draft no longer matches the saved points.
+            CancelDrag();
             SyncPane(true, kind);
             SyncPane(false, kind);
         }
@@ -170,14 +184,26 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
 
         protected override void DrawContent()
         {
-            if (selectedPoint >= (Layer.landmarks?.Count ?? 0)) selectedPoint = -1;
-            if (GUILayout.Button("安定化係数・補正設定・変形検査をInspectorで開く"))
+            var e = Event.current;
+            // Esc is only consumed while a drag is in flight, so it stays free for Unity otherwise.
+            if (Dragging && e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape)
             {
-                Selection.activeGameObject = Layer.gameObject;
-                EditorGUIUtility.PingObject(Layer);
-                EditorApplication.ExecuteMenuItem("Window/General/Inspector");
+                CancelDrag();
+                e.Use();
+                Repaint();
             }
-            var nextSelectIsland = GUILayout.Toolbar(selectIsland ? 0 : 1, new[] { "1. 顔のUV島を選択", "2. 対応点を編集" }) == 0;
+            if (selectedPoint >= (Layer.landmarks?.Count ?? 0)) selectedPoint = -1;
+            if (showLandmarksOnNextLayout && Event.current.type == EventType.Layout)
+            {
+                showLandmarksOnNextLayout = false;
+                selectIsland = false;
+            }
+            // A draft is tied to the current point list, so everything that could change it waits until release.
+            bool nextSelectIsland;
+            using (new EditorGUI.DisabledScope(Dragging))
+            {
+                nextSelectIsland = GUILayout.Toolbar(selectIsland ? 0 : 1, new[] { "1. 顔のUV島を選択", "2. 対応点を編集" }) == 0;
+            }
             if (nextSelectIsland != selectIsland)
             {
                 selectIsland = nextSelectIsland;
@@ -185,7 +211,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 GUIUtility.ExitGUI();
             }
             EditorGUILayout.HelpBox(selectIsland
-                ? "左右のメッシュ・サブメッシュ・UVを選び、顔の肌のUV島をクリックしてください。"
+                ? "左右のメッシュ・サブメッシュ・UVを選び、顔の肌のUV島をクリックしてください。対応点がまだない場合は、左右とも選ぶと目・口の境界から自動で初期配置します。"
                 : "境界番号から口・左右の眼を指定できます。対応点の編集では一覧から点を選び、左右の画像でクリック・ドラッグします。", MessageType.None);
             var size = PreviewSize(position.width, 2);
             using (new EditorGUILayout.HorizontalScope())
@@ -194,61 +220,65 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 GUILayout.Space(16f);
                 DrawPane(false, size);
             }
-            using (new EditorGUILayout.HorizontalScope())
+            using (new EditorGUI.DisabledScope(Dragging))
             {
-                if (GUILayout.Button("目・口の境界候補を提案"))
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    var sourceFound = sourceBoundary.Suggest();
-                    var targetFound = targetBoundary.Suggest();
-                    selectIsland = false;
-                    message = sourceFound && targetFound
-                        ? "口・左右の眼の境界候補を選びました。画像で部位を確認してから、選んだ境界で初期配置してください。保存済みの対応点は変更していません。"
-                        : "一意に提案できない側は境界を個別に選択してください。必要な閉境界がない場合は手動の目印を使ってください。";
-                }
-                if (GUILayout.Button("選んだ境界で初期配置（既存点を置換）"))
-                {
-                    if (FBXUVMakeupLandmarkUtility.TryGenerateFromLoops(sourceBoundary.boundaries, sourceBoundary.boundarySelection,
-                        targetBoundary.boundaries, targetBoundary.boundarySelection, out var generated, out var error))
+                    // The suggestion already fills the selectors whenever a face island is analysed; this only undoes manual picks.
+                    if (GUILayout.Button("境界の選択を提案に戻す"))
                     {
-                        RecordChange("メイク対応点を初期配置", () => Layer.landmarks = generated);
-                        selectedPoint = 0;
+                        var sourceFound = sourceBoundary.Suggest();
+                        var targetFound = targetBoundary.Suggest();
                         selectIsland = false;
-                        message = "28点を初期配置しました。目・口の対応とメイクの位置を確認し、必要に応じて修正してください。";
+                        message = sourceFound && targetFound
+                            ? FBXUVMessage.Info("口・左右の眼の境界を提案に戻しました。保存済みの対応点は変更していません。対応点に反映するには、選んだ境界で初期配置してください。")
+                            : FBXUVMessage.Warning("一意に提案できない側は境界を個別に選択してください。必要な閉境界がない場合は手動の目印を使ってください。");
                     }
-                    else message = error;
-                }
-            }
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button("手動の目印28点を仮配置（既存点を置換）"))
-                {
-                    RecordChange("メイク手動対応点の目印を配置", () => Layer.landmarks = FBXUVMakeupLandmarkUtility.CreateManualTemplate(Layer.sourceRegion, Layer.targetRegion));
-                    selectedPoint = 0; selectIsland = false;
-                    message = "部位名付きの仮の位置です。口角・上下唇、左右の目頭・目尻・上下まぶたを、両方の画像で全て合わせてください。自動検出した位置ではありません。";
-                }
-                if (GUILayout.Button(new GUIContent("鼻先の候補を1点追加", FBXUVMakeupNoseUtility.SuggestionDescription), GUILayout.Width(170)))
-                    TryAddNoseLandmark();
-                if (GUILayout.Button("対応点を追加", GUILayout.Width(120)))
-                {
-                    RecordChange("メイク対応点を追加", () => {
-                        if (Layer.landmarks == null) Layer.landmarks = new List<FBXUVMakeupLandmark>();
-                        Layer.landmarks.Add(new FBXUVMakeupLandmark { name = "対応点 " + (Layer.landmarks.Count + 1),
-                            sourceUv = Vector2.one * .5f, targetUv = Vector2.one * .5f });
-                    });
-                    selectedPoint = Layer.landmarks.Count - 1;
-                    selectIsland = false;
-                }
-                using (new EditorGUI.DisabledScope(!HasSelectedPoint()))
-                {
-                    if (GUILayout.Button("選択点を削除", GUILayout.Width(120)))
+                    if (GUILayout.Button("選んだ境界で初期配置（既存点を置換）"))
                     {
-                        RecordChange("メイク対応点を削除", () => Layer.landmarks.RemoveAt(selectedPoint));
-                        selectedPoint = Mathf.Min(selectedPoint, Layer.landmarks.Count - 1);
+                        if (FBXUVMakeupLandmarkUtility.TryGenerateFromLoops(sourceBoundary.boundaries, sourceBoundary.boundarySelection,
+                            targetBoundary.boundaries, targetBoundary.boundarySelection, out var generated, out var error))
+                        {
+                            RecordChange("メイク対応点を初期配置", () => Layer.landmarks = generated);
+                            selectedPoint = 0;
+                            selectIsland = false;
+                            message = FBXUVMessage.Info("28点を初期配置しました。目・口の対応とメイクの位置を確認し、必要に応じて修正してください。");
+                        }
+                        else message = FBXUVMessage.Warning(error);
+                    }
+                }
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button("手動の目印28点を仮配置（既存点を置換）"))
+                    {
+                        RecordChange("メイク手動対応点の目印を配置", () => Layer.landmarks = FBXUVMakeupLandmarkUtility.CreateManualTemplate(Layer.sourceRegion, Layer.targetRegion));
+                        selectedPoint = 0; selectIsland = false;
+                        message = FBXUVMessage.Info("部位名付きの仮の位置です。口角・上下唇、左右の目頭・目尻・上下まぶたを、両方の画像で全て合わせてください。自動検出した位置ではありません。");
+                    }
+                    if (GUILayout.Button(new GUIContent("鼻先の候補を1点追加", FBXUVMakeupNoseUtility.SuggestionDescription), GUILayout.Width(170)))
+                        TryAddNoseLandmark();
+                    if (GUILayout.Button("対応点を追加", GUILayout.Width(120)))
+                    {
+                        RecordChange("メイク対応点を追加", () => {
+                            if (Layer.landmarks == null) Layer.landmarks = new List<FBXUVMakeupLandmark>();
+                            Layer.landmarks.Add(new FBXUVMakeupLandmark { name = "対応点 " + (Layer.landmarks.Count + 1),
+                                sourceUv = Vector2.one * .5f, targetUv = Vector2.one * .5f });
+                        });
+                        selectedPoint = Layer.landmarks.Count - 1;
+                        selectIsland = false;
+                    }
+                    using (new EditorGUI.DisabledScope(!HasSelectedPoint()))
+                    {
+                        if (GUILayout.Button("選択点を削除", GUILayout.Width(120)))
+                        {
+                            RecordChange("メイク対応点を削除", () => Layer.landmarks.RemoveAt(selectedPoint));
+                            selectedPoint = Mathf.Min(selectedPoint, Layer.landmarks.Count - 1);
+                        }
                     }
                 }
             }
-            if (!string.IsNullOrEmpty(message)) EditorGUILayout.HelpBox(message, MessageType.Info);
-            DrawPoints();
+            message.Draw();
+            using (new EditorGUI.DisabledScope(Dragging)) DrawPoints();
             if (!Layer.CanRender(out var renderError)) EditorGUILayout.HelpBox(renderError, MessageType.Warning);
         }
 
@@ -277,7 +307,10 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             using (new EditorGUILayout.VerticalScope(GUILayout.Width(size + 16f)))
             {
                 pick = pane.Draw(context);
-                if (!selectIsland) boundary.DrawSelectors();
+                if (!selectIsland)
+                {
+                    using (new EditorGUI.DisabledScope(Dragging)) boundary.DrawSelectors();
+                }
             }
             if (isSource) sourceImageRect = pane.PreviewScreenRect; else targetImageRect = pane.PreviewScreenRect;
             if (!pick.HasValue) return;
@@ -293,7 +326,9 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             if (changed || !ReferenceEquals(boundary.analyzedRegion, region)) boundary.Analyze(region);
         }
 
-        private void StoreIsland(bool isSource, in FBXUVRegionPick pick)
+        // Only an island picked here places points automatically, and only while there are none: opening the window,
+        // Undo and refreshes never do, so undoing a placement does not bring it back.
+        internal void StoreIsland(bool isSource, in FBXUVRegionPick pick)
         {
             var region = FBXUVRegionFactory.Create(pick, AnalysisCache);
             RecordChange("メイクの顔UV島を選択", () => {
@@ -301,7 +336,24 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             });
             (isSource ? SourcePane : TargetPane).MarkSaved(FBXUVSavedRegion.From(region));
             if (Layer.landmarks != null && Layer.landmarks.Count > 0)
-                message = "顔のUV島を変更しました。既存の対応点の位置を再確認するか、目・口から初期配置し直してください。";
+            {
+                message = FBXUVMessage.Warning("顔のUV島を変更しました。既存の対応点の位置を再確認するか、目・口から初期配置し直してください。");
+                return;
+            }
+            // The new region is analysed now rather than at the next draw. An unchanged side keeps its current selectors.
+            SyncPane(true, FBXUVRefreshKind.None);
+            SyncPane(false, FBXUVRefreshKind.None);
+            if (!HasBothFaceIslands()) return;
+            if (!FBXUVMakeupLandmarkUtility.TryGenerateFromLoops(sourceBoundary.boundaries, sourceBoundary.boundarySelection,
+                targetBoundary.boundaries, targetBoundary.boundarySelection, out var generated, out _))
+            {
+                message = FBXUVMessage.Warning("目・口の境界を自動で決められなかったため、対応点は配置していません。「2. 対応点を編集」で口・左右の眼の境界を選んで初期配置するか、手動の目印を配置してください。");
+                return;
+            }
+            RecordChange("メイク対応点を初期配置", () => Layer.landmarks = generated);
+            selectedPoint = 0;
+            showLandmarksOnNextLayout = true;
+            message = FBXUVMessage.Info("左右の顔のUV島から、目・口の境界に合わせて28点を自動で初期配置しました。目・口の対応とメイクの位置を確認し、必要に応じて修正してください。");
         }
 
         private void DrawOverlay(FBXUVRegionPickerPane pane, MakeupBoundaryState boundary, bool isSource, Rect image)
@@ -315,7 +367,8 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             {
                 var point = Layer.landmarks[i];
                 if (point == null) continue;
-                var xy = FBXUVPreviewViewport.ToGui(image, isSource ? point.sourceUv : point.targetUv);
+                var uv = Dragging && i == draftPoint && isSource == draftIsSource ? draftUv : isSource ? point.sourceUv : point.targetUv;
+                var xy = FBXUVPreviewViewport.ToGui(image, uv);
                 Handles.color = i == selectedPoint ? Color.yellow : Color.magenta;
                 Handles.DrawSolidDisc(xy, Vector3.forward, i == selectedPoint ? 5 : 3);
                 GUI.Label(new Rect(xy.x + 4, xy.y - 16, 45, 20), (i + 1).ToString(), EditorStyles.whiteMiniLabel);
@@ -336,21 +389,33 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 if (hit >= 0) selectedPoint = hit;
                 if (HasSelectedPoint())
                 {
-                    // One Undo group per drag; EndDrag collapses it.
-                    Undo.IncrementCurrentGroup();
-                    dragUndoGroup = Undo.GetCurrentGroup();
+                    draftPoint = selectedPoint;
+                    draftIsSource = isSource;
+                    draftUv = ClampUv(FBXUVPreviewViewport.ToUv(image, current.mousePosition));
                     GUIUtility.hotControl = dragControl = control;
-                    MovePoint(isSource, ClampUv(FBXUVPreviewViewport.ToUv(image, current.mousePosition)));
                 }
             }
-            else if (current.type == EventType.MouseDrag && GUIUtility.hotControl == control && dragControl == control)
-                MovePoint(isSource, ClampUv(FBXUVPreviewViewport.ToUv(image, current.mousePosition)));
-            else if (current.type == EventType.MouseUp && dragControl == control)
-                EndDrag();
+            else if (current.type == EventType.MouseDrag && Dragging && dragControl == control && GUIUtility.hotControl == control)
+                draftUv = ClampUv(FBXUVPreviewViewport.ToUv(image, current.mousePosition));
+            else if (current.type == EventType.MouseUp && Dragging && dragControl == control)
+                CommitDraft();
             else return false;
             current.Use();
             Repaint();
             return true;
+        }
+
+        // Saves the draft as one Undo step. The point may have been removed meanwhile; then nothing is written.
+        private void CommitDraft()
+        {
+            var index = draftPoint;
+            var isSource = draftIsSource;
+            var uv = draftUv;
+            CancelDrag();
+            if (Layer == null || Layer.landmarks == null || index < 0 || index >= Layer.landmarks.Count || Layer.landmarks[index] == null) return;
+            RecordChange("メイク対応点を移動", () => {
+                if (isSource) Layer.landmarks[index].sourceUv = uv; else Layer.landmarks[index].targetUv = uv;
+            });
         }
 
         private void DrawPoints()
@@ -384,17 +449,15 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
                 : CandidateCache.GetTarget(Layer, TargetModelOrPrefab, ResolveTargetTexture(), FBXUVCandidateGrouping.ByMesh, out error);
         }
 
-        private void MovePoint(bool isSource, Vector2 uv)
-        {
-            if (!HasSelectedPoint()) return;
-            RecordChange("メイク対応点を移動", () => { if (isSource) Layer.landmarks[selectedPoint].sourceUv = uv; else Layer.landmarks[selectedPoint].targetUv = uv; });
-        }
+        private bool HasBothFaceIslands() => Layer != null
+            && (Layer.sourceRegion?.triangles?.Count ?? 0) > 0 && (Layer.targetRegion?.triangles?.Count ?? 0) > 0;
         private bool HasSelectedPoint() => Layer != null && Layer.landmarks != null && selectedPoint >= 0 && selectedPoint < Layer.landmarks.Count && Layer.landmarks[selectedPoint] != null;
-        private void EndDrag()
+        // Drops the draft without touching the layer and releases the drag's hot control.
+        internal void CancelDrag()
         {
             if (dragControl != 0 && GUIUtility.hotControl == dragControl) GUIUtility.hotControl = 0;
-            if (dragUndoGroup >= 0) Undo.CollapseUndoOperations(dragUndoGroup);
-            dragControl = 0; dragUndoGroup = -1;
+            dragControl = 0;
+            draftPoint = -1;
         }
         private int FindPoint(Rect rect, bool isSource, Vector2 mouse)
         {

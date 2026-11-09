@@ -38,7 +38,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
             }
 
             EditorGUILayout.HelpBox(
-                "適用先は親MultiLayerImageCanvasのTargetTextureだけです。targetごとにMLICとLayerを1対1で配置してください。",
+                "適用先は Canvasの対象テクスチャ（親 MultiLayerImageCanvas の Target Texture）だけです。転送先ごとに MultiLayerImageCanvas とレイヤーを1対1で配置してください。",
                 MessageType.Info);
         }
 

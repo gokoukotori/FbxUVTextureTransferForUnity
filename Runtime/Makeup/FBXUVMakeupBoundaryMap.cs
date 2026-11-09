@@ -9,8 +9,7 @@ namespace GokouKotori.FBXUVTextureTransfer
     public static class FBXUVMakeupBoundaryMap
     {
         private const int MaximumBoundaryPoints = 512;
-        private static double Cross(Vector2 a, Vector2 b) => a.x * (double)b.y - a.y * (double)b.x;
-        private static double Area(IReadOnlyList<Vector2> p, int[] t) => Cross(p[t[1]] - p[t[0]], p[t[2]] - p[t[0]]);
+        private static double Area(IReadOnlyList<Vector2> p, int[] t) => FBXUVMath.CrossDouble(p[t[1]] - p[t[0]], p[t[2]] - p[t[0]]);
         private static (int, int) Edge(int a, int b) => a < b ? (a, b) : (b, a);
 
         public static bool TryCreate(FBXUVMakeupTransferLayer layer, FBXUVMakeupExactMap baseline,
@@ -199,9 +198,9 @@ namespace GokouKotori.FBXUVTextureTransfer
                 var knots = new List<double>();
                 foreach (var edge in baseEdges)
                 {
-                    var v = edge[0]; var f = edge[1] - v; var den = Cross(d, f);
+                    var v = edge[0]; var f = edge[1] - v; var den = FBXUVMath.CrossDouble(d, f);
                     if (Math.Abs(den) < 1e-14) continue;
-                    var t = Cross(v - u, f) / den; var r = Cross(v - u, d) / den;
+                    var t = FBXUVMath.CrossDouble(v - u, f) / den; var r = FBXUVMath.CrossDouble(v - u, d) / den;
                     if (t > 1e-5 && t < 1 - 1e-5 && r >= -1e-7 && r <= 1 + 1e-7) knots.Add(t);
                 }
                 knots.Sort(); var previous = a; var last = -1d;
@@ -236,8 +235,8 @@ namespace GokouKotori.FBXUVTextureTransfer
                     var a = edges[i]; var b = edges[j];
                     if (a.Item1 == b.Item1 || a.Item1 == b.Item2 || a.Item2 == b.Item1 || a.Item2 == b.Item2) continue;
                     var u = points[a.Item1]; var v = points[a.Item2]; var w = points[b.Item1]; var z = points[b.Item2];
-                    if (Cross(v - u, w - u) * Cross(v - u, z - u) < -1e-22
-                        && Cross(z - w, u - w) * Cross(z - w, v - w) < -1e-22) return false;
+                    if (FBXUVMath.CrossDouble(v - u, w - u) * FBXUVMath.CrossDouble(v - u, z - u) < -1e-22
+                        && FBXUVMath.CrossDouble(z - w, u - w) * FBXUVMath.CrossDouble(z - w, v - w) < -1e-22) return false;
                 }
             return true;
         }

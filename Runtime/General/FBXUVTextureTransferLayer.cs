@@ -47,31 +47,31 @@ namespace GokouKotori.FBXUVTextureTransfer
             if (analysisCache == null) throw new ArgumentNullException(nameof(analysisCache));
             if (!SystemInfo.supportsComputeShaders) return Fail("ComputeShaderがサポートされていません。", out reason);
             if (ResolveTriangleShader() == null || ResolvePixelProcessShader() == null) return Fail("Shaderリソースを読み込めません。", out reason);
-            if (regionBindings == null || regionBindings.Count == 0) return Fail("Region bindingがありません。", out reason);
-            if (defaultSourceTexture == null) return Fail("source Textureが未設定です。", out reason);
+            if (regionBindings == null || regionBindings.Count == 0) return Fail("Regionがありません。", out reason);
+            if (defaultSourceTexture == null) return Fail("転送元テクスチャが未設定です。", out reason);
 
             var enabledCount = 0;
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var index = 0; index < regionBindings.Count; index++)
             {
                 var binding = regionBindings[index];
-                if (binding == null) return Fail("Region bindingが未設定です。", out reason);
+                if (binding == null) return Fail("Regionが未設定です。", out reason);
                 if (!binding.enabled) continue;
                 enabledCount++;
-                if (string.IsNullOrWhiteSpace(binding.name)) return Fail("有効なRegion bindingの名前が空です。", out reason);
+                if (string.IsNullOrWhiteSpace(binding.name)) return Fail("有効なRegionの名前が空です。", out reason);
                 var normalized = binding.name.Trim();
                 if (!FBXUVDeformationUtility.IsDefinedOrientation(binding.orientation))
                 {
-                    return Fail("Region bindingの向き補正が不正です: " + normalized, out reason);
+                    return Fail($"Region「{normalized}」の向き補正が不正です。", out reason);
                 }
-                if (!seen.Add(normalized)) return Fail("有効なRegion binding名が重複しています。", out reason);
+                if (!seen.Add(normalized)) return Fail("有効なRegionの名前が重複しています。", out reason);
                 if (!IsRegionReady(binding.sourceRegion, analysisCache)
                     || !IsRegionReady(binding.targetRegion, analysisCache))
                 {
-                    return Fail("Regionの選択またはMesh hashが無効です: " + normalized, out reason);
+                    return Fail($"Region「{normalized}」のUV島の選択が無効か、メッシュの内容が保存時と異なります。", out reason);
                 }
             }
-            if (enabledCount == 0) return Fail("有効なRegion bindingがありません。", out reason);
+            if (enabledCount == 0) return Fail("有効なRegionがありません。", out reason);
             reason = string.Empty;
             return true;
         }

@@ -177,7 +177,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             foreach (var item in FBXUVRendererMeshUtility.Collect(root))
             {
-                var path = FBXUVEyeGeometry.Path(root.transform, item.Renderer.transform);
+                var path = FBXUVRendererMeshUtility.RelativePath(root.transform, item.Renderer.transform);
                 for (var subMeshIndex = 0; subMeshIndex < item.Mesh.subMeshCount; subMeshIndex++)
                     options.Add(CreateRendererOption(root, item.Renderer, item.Mesh, subMeshIndex, path));
             }
@@ -187,7 +187,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor
         {
             foreach (var item in FBXUVTargetMeshCollector.CollectRenderers(root, texture))
             {
-                var path = FBXUVEyeGeometry.Path(root.transform, item.Renderer.transform);
+                var path = FBXUVRendererMeshUtility.RelativePath(root.transform, item.Renderer.transform);
                 // Retain the existing rejection of ambiguous saved renderer paths.
                 try
                 {

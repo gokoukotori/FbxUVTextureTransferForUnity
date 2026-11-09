@@ -21,6 +21,7 @@ Shader "Hidden/FBXUVTextureTransfer/TransferTriangles"
             #pragma vertex Vert
             #pragma fragment FragTransfer
             #include "UnityCG.cginc"
+            #include "FBXUVColor.hlsl"
 
             Texture2D _MainTex;
             SamplerState sampler_LinearClamp;
@@ -38,11 +39,6 @@ Shader "Hidden/FBXUVTextureTransfer/TransferTriangles"
                 float4 position : SV_POSITION;
                 float2 uv : TEXCOORD0;
             };
-
-            float GammaFromLinear(float value)
-            {
-                return value <= 0.0031308 ? value * 12.92 : 1.055 * pow(max(value, 0.0), 1.0 / 2.4) - 0.055;
-            }
 
             Varyings Vert(Attributes input)
             {

@@ -59,7 +59,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
         {
             if (!FBXUVLayerValidation.TryBegin(
                     layer,
-                    "Layer が見つかりません。",
+                    "FBX UV Texture Transfer Layer がありません。",
                     "FBX UV Texture Transfer Layer",
                     validateEnvironment,
                     buildAvatarRoot,
@@ -81,17 +81,20 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             var targetCandidates = isTargetRootValid && targetTexture != null
                 ? FBXUVTargetMeshCollector.Collect(targetModelOrPrefab, targetTexture)
                 : null;
+            var avatarCandidates = avatarRoot != null && targetTexture != null
+                ? FBXUVTargetMeshCollector.Collect(avatarRoot, targetTexture)
+                : null;
             var defaultTexture = ObjectReference<Texture2D>(serializedLayer, "defaultSourceTexture");
             var bindings = serializedLayer.FindProperty("regionBindings");
 
             if (defaultTexture == null)
             {
-                Add(issues, "source Texture が未設定です。", layer);
+                Add(issues, "転送元テクスチャが未設定です。Inspector の「転送元テクスチャ」を設定してください。", layer);
             }
 
             if (bindings == null || !bindings.isArray || bindings.arraySize == 0)
             {
-                Add(issues, "Region Binding が空です。少なくとも1つ追加してください。空リストを全regionとして扱うことはできません。", layer);
+                Add(issues, $"Region の一覧が空です。{FBXUVEditorNames.TextureTransferEditor}で少なくとも1つ追加してください。空の一覧を全Regionとして扱うことはできません。", layer);
                 ValidateResources(layer, issues);
                 return issues;
             }
@@ -107,7 +110,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                     : null;
                 if (bindingValue == null)
                 {
-                    Add(issues, $"Region Binding [{index}] が未設定です。", layer);
+                    Add(issues, $"{index + 1}番目の Region が未設定です。", layer);
                     continue;
                 }
 
@@ -122,13 +125,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                 var name = rawName?.Trim();
                 if (string.IsNullOrEmpty(name))
                 {
-                    Add(issues, $"Region Binding [{index}] の名前が空です。", layer);
+                    Add(issues, $"{index + 1}番目の Region の名前が空です。", layer);
                     continue;
                 }
 
                 if (!boundNames.Add(name))
                 {
-                    Add(issues, $"Region Binding '{name}' が重複しています。名前は前後の空白を除去して大文字小文字を区別せず照合されます。", layer);
+                    Add(issues, $"Region「{name}」が重複しています。名前は前後の空白を除去して大文字小文字を区別せず照合されます。", layer);
                     continue;
                 }
 
@@ -138,23 +141,24 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                     : (FBXUVTransferOrientation)orientationProperty.intValue;
                 if (!FBXUVDeformationUtility.IsDefinedOrientation(orientation))
                 {
-                    Add(issues, $"Region Binding '{name}' の向き補正値が不正です。向き補正を選び直してください。", layer);
+                    Add(issues, $"Region「{name}」の向き補正値が不正です。向き補正を選び直してください。", layer);
                 }
 
                 var sourceRegion = binding.FindPropertyRelative("sourceRegion");
+                var sourceLabel = $"Region「{name}」の転送元";
                 if (bindingValue.sourceRegion == null || sourceRegion == null)
                 {
-                    Add(issues, $"Source region '{name}' が未設定です。", layer);
+                    Add(issues, $"{sourceLabel}が未設定です。{FBXUVEditorNames.TextureTransferEditor}で設定してください。", layer);
                 }
                 else
                 {
-                    ValidateRegion(sourceRegion, $"Source region '{name}'", layer, issues, analysisCache);
+                    ValidateRegion(sourceRegion, sourceLabel, layer, issues, analysisCache);
                     if (isSourceRootValid)
                     {
                         ValidateRegionMeshInRoot(
                             sourceRegion,
-                            $"Source region '{name}'",
-                            "Source",
+                            sourceLabel,
+                            "転送元",
                             sourceModelOrPrefab,
                             layer,
                             issues);
@@ -162,13 +166,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                 }
 
                 var targetRegion = binding.FindPropertyRelative("targetRegion");
+                var targetLabel = $"Region「{name}」の転送先";
                 if (bindingValue.targetRegion == null || targetRegion == null)
                 {
-                    Add(issues, $"Target region '{name}' が未設定です。", layer);
+                    Add(issues, $"{targetLabel}が未設定です。{FBXUVEditorNames.TextureTransferEditor}で設定してください。", layer);
                 }
                 else
                 {
-                    ValidateRegion(targetRegion, $"Target region '{name}'", layer, issues, analysisCache);
+                    ValidateRegion(targetRegion, targetLabel, layer, issues, analysisCache);
                     if (isTargetRootValid)
                     {
                         ValidateTargetRegionInRoot(
@@ -179,14 +184,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                             layer,
                             issues);
                     }
-                    ValidateTargetMeshInAvatar(targetRegion, name, layer, avatarRoot, issues);
+                    ValidateTargetMeshInAvatar(targetRegion, name, layer, avatarRoot, avatarCandidates, issues);
                 }
 
             }
 
             if (enabledCount == 0)
             {
-                Add(issues, "有効な Region Binding がありません。", layer);
+                Add(issues, "有効な Region がありません。", layer);
             }
 
             ValidateResources(layer, issues);
@@ -203,27 +208,27 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             var mesh = region.FindPropertyRelative("mesh")?.objectReferenceValue as Mesh;
             if (mesh == null)
             {
-                Add(issues, $"{label} の Mesh が未設定です。EditorWindowでislandを再選択してください。", contextObject);
+                Add(issues, $"{label}のメッシュが未設定です。{FBXUVEditorNames.TextureTransferEditor}でUV島を選び直してください。", contextObject);
                 return;
             }
 
             var subMeshIndex = region.FindPropertyRelative("subMeshIndex")?.intValue ?? -1;
             if (subMeshIndex < 0 || subMeshIndex >= mesh.subMeshCount)
             {
-                Add(issues, $"{label} の submesh {subMeshIndex} は Mesh '{mesh.name}' に存在しません。", contextObject);
+                Add(issues, $"{label}のサブメッシュ {subMeshIndex} はメッシュ「{mesh.name}」に存在しません。", contextObject);
                 return;
             }
 
             if (mesh.GetTopology(subMeshIndex) != MeshTopology.Triangles)
             {
-                Add(issues, $"{label} の submeshはTriangle topologyではありません。", contextObject);
+                Add(issues, $"{label}のサブメッシュは三角形のメッシュではありません。", contextObject);
                 return;
             }
 
             var uvChannel = region.FindPropertyRelative("uvChannel")?.intValue ?? -1;
             if (uvChannel < 0 || uvChannel > 7)
             {
-                Add(issues, $"{label} の UV channel {uvChannel} は範囲外です。", contextObject);
+                Add(issues, $"{label}のUVチャンネル {uvChannel} は範囲外です。", contextObject);
                 return;
             }
 
@@ -233,25 +238,25 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                 var triangles = analysis.GetTriangles();
                 if (triangles == null || triangles.Count == 0)
                 {
-                    Add(issues, $"{label} のUV triangleを取得できません。UV channelを確認してください。", contextObject);
+                    Add(issues, $"{label}のUVの三角形を取得できません。UVチャンネルを確認してください。", contextObject);
                 }
 
                 var savedHash = region.FindPropertyRelative("meshHash")?.stringValue;
                 var currentHash = analysis.GetContentHash();
                 if (string.IsNullOrEmpty(savedHash) || !string.Equals(savedHash, currentHash, StringComparison.Ordinal))
                 {
-                    Add(issues, $"{label} のMesh内容hashが一致しません。自動修復は行わないためEditorWindowでislandを再選択してください。", contextObject);
+                    Add(issues, $"{label}のメッシュの内容が保存時と異なります。自動修復は行わないため{FBXUVEditorNames.TextureTransferEditor}でUV島を選び直してください。", contextObject);
                 }
             }
             catch (Exception exception)
             {
-                Add(issues, $"{label} を検証できません: {exception.Message}", contextObject);
+                Add(issues, $"{label}を検証できません: {exception.Message}", contextObject);
             }
 
             var savedTriangles = region.FindPropertyRelative("triangles");
             if (savedTriangles == null || !savedTriangles.isArray || savedTriangles.arraySize == 0)
             {
-                Add(issues, $"{label} に保存されたUV triangleがありません。", contextObject);
+                Add(issues, $"{label}に保存されたUVの三角形がありません。", contextObject);
             }
 
             var bounds = region.FindPropertyRelative("bounds");
@@ -261,15 +266,17 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             var maxV = bounds?.FindPropertyRelative("maxV")?.floatValue ?? 0f;
             if (!(maxU > minU) || !(maxV > minV))
             {
-                Add(issues, $"{label} のUV boundsが無効です。EditorWindowでislandを再選択してください。", contextObject);
+                Add(issues, $"{label}のUVの範囲が無効です。{FBXUVEditorNames.TextureTransferEditor}でUV島を選び直してください。", contextObject);
             }
         }
 
+        // avatarCandidates: the avatar's meshes / submeshes drawn with the canvas TargetTexture, or null without one.
         private static void ValidateTargetMeshInAvatar(
             SerializedProperty region,
             string regionName,
             Object contextObject,
             GameObject avatarRoot,
+            IReadOnlyList<FBXUVTargetMeshCandidate> avatarCandidates,
             ICollection<FBXUVTransferValidationIssue> issues)
         {
             var mesh = region.FindPropertyRelative("mesh")?.objectReferenceValue as Mesh;
@@ -280,12 +287,28 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             {
                 Add(
                     issues,
-                    $"Target region '{regionName}' の Mesh '{mesh.name}' は VRChat Avatar Root 配下のRendererで使用されていません。Target regionを確認してください。",
+                    $"Region「{regionName}」の転送先のメッシュ「{mesh.name}」はアバター配下のRendererで使用されていません。Region「{regionName}」の転送先を確認してください。",
+                    contextObject);
+                return;
+            }
+
+            if (avatarCandidates == null) return;
+
+            // An out-of-range submesh is already reported by ValidateRegion.
+            var subMeshIndex = region.FindPropertyRelative("subMeshIndex")?.intValue ?? -1;
+            if (subMeshIndex < 0 || subMeshIndex >= mesh.subMeshCount) return;
+
+            if (!avatarCandidates.Any(candidate => candidate.Mesh == mesh && candidate.SubMeshIndices.Contains(subMeshIndex)))
+            {
+                Add(
+                    issues,
+                    $"Region「{regionName}」の転送先のメッシュ「{mesh.name}」/ サブメッシュ {subMeshIndex} を、Canvasの対象テクスチャを使って描画するRendererがアバター配下にありません。Region「{regionName}」の転送先またはアバターのMaterialを確認してください。",
                     contextObject);
             }
         }
 
-        private static void ValidateRegionMeshInRoot(
+        // Adds an issue when the region's mesh is set but not used under root. Returns true only when it is used.
+        private static bool ValidateRegionMeshInRoot(
             SerializedProperty region,
             string regionLabel,
             string rootLabel,
@@ -294,12 +317,14 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             ICollection<FBXUVTransferValidationIssue> issues)
         {
             var mesh = region.FindPropertyRelative("mesh")?.objectReferenceValue as Mesh;
-            if (mesh == null || FBXUVModelPrefabReferenceUtility.ContainsMesh(root, mesh)) return;
+            if (mesh == null) return false;
+            if (FBXUVModelPrefabReferenceUtility.ContainsMesh(root, mesh)) return true;
 
             Add(
                 issues,
-                $"{regionLabel} の Mesh '{mesh.name}' は {rootLabel} Model/Prefab 配下のRendererまたはMeshFilterで使用されていません。{regionLabel}を選び直してください。",
+                $"{regionLabel}のメッシュ「{mesh.name}」は{rootLabel} Model / Prefab 配下のRendererまたはMeshFilterで使用されていません。{FBXUVEditorNames.TextureTransferEditor}で{regionLabel}を選び直してください。",
                 contextObject);
+            return false;
         }
 
         private static void ValidateTargetRegionInRoot(
@@ -310,20 +335,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             Object contextObject,
             ICollection<FBXUVTransferValidationIssue> issues)
         {
-            var mesh = region.FindPropertyRelative("mesh")?.objectReferenceValue as Mesh;
-            if (mesh == null) return;
-
-            if (!FBXUVModelPrefabReferenceUtility.ContainsMesh(targetRoot, mesh))
-            {
-                Add(
-                    issues,
-                    $"Target region '{regionName}' の Mesh '{mesh.name}' は Target Model/Prefab 配下のRendererまたはMeshFilterで使用されていません。Target regionを選び直してください。",
-                    contextObject);
+            if (!ValidateRegionMeshInRoot(
+                    region, $"Region「{regionName}」の転送先", "転送先", targetRoot, contextObject, issues))
                 return;
-            }
 
             if (targetCandidates == null) return;
 
+            var mesh = region.FindPropertyRelative("mesh")?.objectReferenceValue as Mesh;
             var subMeshIndex = region.FindPropertyRelative("subMeshIndex")?.intValue ?? -1;
             if (subMeshIndex < 0 || subMeshIndex >= mesh.subMeshCount) return;
 
@@ -333,7 +351,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             {
                 Add(
                     issues,
-                    $"Target region '{regionName}' の Mesh '{mesh.name}' / submesh {subMeshIndex} は、親 MultiLayerImageCanvas の TargetTexture を使用する Target Model/Prefab 配下の候補に含まれていません。Target regionを選び直してください。",
+                    $"Region「{regionName}」の転送先のメッシュ「{mesh.name}」/ サブメッシュ {subMeshIndex} は、Canvasの対象テクスチャを使用する転送先 Model / Prefab 配下の候補に含まれていません。{FBXUVEditorNames.TextureTransferEditor}でRegion「{regionName}」の転送先を選び直してください。",
                     contextObject);
             }
         }
@@ -342,28 +360,13 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
             FBXUVTextureTransferLayer layer,
             ICollection<FBXUVTransferValidationIssue> issues)
         {
-            var packagedTriangleShader = FBXUVTextureTransferResources.LoadTriangleShader();
-            var triangleShader = layer.ResolveTriangleShader();
-            if (triangleShader == null || packagedTriangleShader == null)
-            {
-                Add(issues, "変形triangle描画用Shaderを読み込めません。パッケージを再インポートしてください。", layer);
-            }
-            else if (triangleShader != packagedTriangleShader)
-            {
-                Add(issues, "変形triangle描画用Shaderがパッケージ既定assetではありません。既定値へ戻してください。", layer);
-            }
+            ValidatePackagedResource(
+                FBXUVTextureTransferResources.LoadTriangleShader(), layer.ResolveTriangleShader(),
+                "三角形変形描画用Shader", layer, issues);
 
             var packagedPixelProcessShader = FBXUVTextureTransferResources.LoadPixelProcessShader();
             var pixelProcessShader = layer.ResolvePixelProcessShader();
-            if (pixelProcessShader == null || packagedPixelProcessShader == null)
-            {
-                Add(issues, "穴埋め・bleed用ComputeShaderを読み込めません。パッケージを再インポートしてください。", layer);
-            }
-            else if (pixelProcessShader != packagedPixelProcessShader)
-            {
-                Add(issues, "穴埋め・bleed用ComputeShaderがパッケージ既定assetではありません。既定値へ戻してください。", layer);
-            }
-            else
+            if (ValidatePackagedResource(packagedPixelProcessShader, pixelProcessShader, "穴埋め・bleed用ComputeShader", layer, issues))
             {
                 ValidateComputeKernel(pixelProcessShader, "InitializeSeeds", layer, issues);
                 ValidateComputeKernel(pixelProcessShader, "PropagateSeeds", layer, issues);
@@ -371,6 +374,30 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
                 ValidateComputeKernel(pixelProcessShader, "Dilate8Connected", layer, issues);
                 ValidateComputeKernel(pixelProcessShader, "CompositeStraightAlpha", layer, issues);
             }
+        }
+
+        // The layer must use the package's own asset. Returns true when it does.
+        private static bool ValidatePackagedResource<T>(
+            T packaged,
+            T resolved,
+            string label,
+            Object contextObject,
+            ICollection<FBXUVTransferValidationIssue> issues)
+            where T : Object
+        {
+            if (resolved == null || packaged == null)
+            {
+                Add(issues, $"{label}を読み込めません。パッケージを再インポートしてください。", contextObject);
+                return false;
+            }
+
+            if (resolved != packaged)
+            {
+                Add(issues, $"{label}がパッケージ既定assetではありません。既定値へ戻してください。", contextObject);
+                return false;
+            }
+
+            return true;
         }
 
         private static void ValidateComputeKernel(
@@ -381,7 +408,7 @@ namespace GokouKotori.FBXUVTextureTransfer.Editor.NDMF
         {
             if (!shader.HasKernel(kernelName))
             {
-                Add(issues, $"穴埋め・bleed用ComputeShaderにkernel '{kernelName}' がありません。", contextObject);
+                Add(issues, $"穴埋め・bleed用ComputeShaderにkernel「{kernelName}」がありません。", contextObject);
             }
         }
 

@@ -71,11 +71,11 @@ namespace GokouKotori.FBXUVTextureTransfer
                 if (!SystemInfo.supportsComputeShaders || shader == null || !shader.isSupported || ResolvePixelProcessShader() == null)
                     throw new ArgumentException("ボディ転送のShader / ComputeShaderを利用できません。");
                 if (overlayTexture == null) throw new ArgumentException("オーバーレイ画像が未設定です。");
-                if (sourceModelOrPrefab == null) throw new ArgumentException("転送元 Model/Prefab が未設定です。");
-                if (targetModelOrPrefab == null) throw new ArgumentException("転送先 Model/Prefab が未設定です。");
+                if (sourceModelOrPrefab == null) throw new ArgumentException("転送元 Model / Prefab が未設定です。");
+                if (targetModelOrPrefab == null) throw new ArgumentException("転送先 Model / Prefab が未設定です。");
                 if (sourceBodyTexture == null) throw new ArgumentException("転送元ボディテクスチャが未設定です。");
                 var targetTexture = FBXUVCanvasTargetUtility.ResolveTargetTexture(this);
-                if (targetTexture == null) throw new ArgumentException("親 MultiLayerImageCanvas の Target Texture が見つかりません。");
+                if (targetTexture == null) throw new ArgumentException("Canvasの対象テクスチャが見つかりません。親 MultiLayerImageCanvas の Target Texture を確認してください。");
                 if (resolution <= 0) throw new ArgumentException("対応マップの解像度が不正です。");
                 entry = FBXUVBodyCorrespondenceCache.Get(sourceModelOrPrefab, sourceBodyTexture, targetModelOrPrefab, targetTexture, resolution, alignNipples, sourceNippleShape, targetNippleShape);
                 reason = string.Empty;
